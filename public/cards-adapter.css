@@ -1,0 +1,59 @@
+.hand .playingCards{display:flex;width:100%;justify-content:center}
+.hand .playingCards .hand{height:112px;align-items:flex-end}
+.hand .playingCards .card{width:2.85em;height:4em;margin-left:0;padding:.25em;font-size:1.15em}
+.hand .playingCards.loose .hand>li{margin-left:-1.35em}
+.hand .playingCards.loose .hand>li:first-child{margin-left:0}
+@media(max-width:700px){.hand .playingCards .hand{height:84px}.hand .playingCards .card{width:2.45em;height:3.55em;font-size:.95em}.hand .playingCards.loose .hand>li{margin-left:-1.25em}}
+.played-cards .playingCards .hand{height:72px;align-items:flex-end;justify-content:center}
+.played-cards .playingCards .card{width:2.35em;height:3.3em;font-size:.9em;cursor:default;box-shadow:.1em .15em .35em #06265a55}
+.played-cards .playingCards .card:hover{transform:none}
+.played-cards .playingCards.compact .hand>li{margin-left:-1em}
+.played-cards .playingCards.compact .hand>li:first-child{margin-left:0}
+.played-slot{position:absolute;z-index:4;min-width:150px;min-height:96px;display:flex;align-items:center;justify-content:center}
+.seat-left .played-slot{left:118px;top:76px}
+.seat-right .played-slot{right:118px;top:76px}
+.seat-self .played-slot{left:50%;bottom:195px;transform:translateX(-50%)}
+.seat-self>.actions{bottom:138px}
+.played-slot .playingCards .hand{height:96px;align-items:flex-end;justify-content:center}
+.played-slot .playingCards .card{width:3.25em;height:4.55em;font-size:1.05em;cursor:default;box-shadow:.1em .15em .35em #06265a55}
+.played-slot .playingCards .card:hover{transform:none}
+.played-slot .playingCards.compact .hand>li{margin-left:-1em}
+.played-slot .playingCards.compact .hand>li:first-child{margin-left:0}
+.bottom-cards{display:flex;align-items:flex-start;padding-top:3px}
+.bottom-cards .hand{height:96px;align-items:flex-start}
+.bottom-cards .card{width:4em;height:5.6em;font-size:1.1em;cursor:default;box-shadow:.1em .15em .35em #06265a55}
+.bottom-cards .card:hover{transform:none}
+.bottom-cards .hand>li{margin-left:-.8em}
+.bottom-cards .hand>li:first-child{margin-left:0}
+@media(max-width:760px){
+  .played-slot{min-width:124px;min-height:80px}
+  .seat-left .played-slot{left:76px;top:66px}
+  .seat-right .played-slot{right:76px;top:66px}
+  .seat-self .played-slot{bottom:160px}
+  .seat-self>.actions{bottom:110px}
+  .played-slot .playingCards .hand{height:80px}
+  .played-slot .playingCards .card{width:2.75em;height:3.9em;font-size:.95em}
+  .bottom-cards .hand{height:80px}
+  .bottom-cards .card{width:3.3em;height:4.7em;font-size:1em}
+}
+.game-info .view-toggle{padding:7px 11px;border:1px solid #d0e6ff55;border-radius:999px;background:#0c37705c;color:#dbeaff;font-weight:700}
+.game-info .countdown{font-variant-numeric:tabular-nums;color:#fff}
+.game-info .countdown.urgent{background:#9b3030cc;color:#fff2f2}
+.turn-timer{position:absolute;top:42%;left:50%;transform:translate(-50%,-50%);z-index:2;padding:9px 18px;border:1px solid #d0e6ff66;border-radius:999px;background:#0c377080;color:#fff;font-size:22px;font-weight:800;letter-spacing:.03em;text-shadow:0 2px 4px #08244c88;pointer-events:none}
+.turn-timer.urgent{background:#9b3030dd;color:#fff2f2}
+.game-info .view-toggle.active{background:#fff;color:#1d5596}
+.opponent-face{width:280px;min-height:108px;margin-top:12px}
+.opponent-face .playingCards{width:100%}
+.opponent-face .playingCards .hand{height:auto;min-height:100px;max-width:280px;align-items:flex-start;align-content:flex-start;justify-content:flex-start;flex-wrap:wrap;gap:0;padding:0}
+.opponent-face .card{width:1.9em;height:2.8em;font-size:.9em;cursor:default;box-shadow:.1em .15em .35em #06265a55}
+.opponent-face .card:hover{transform:none}
+.opponent-face .hand>li{margin-left:-.25em}
+.opponent-face .hand>li:first-child{margin-left:0}
+.seat-right .opponent-face .hand{justify-content:flex-end}
+@media(max-width:760px){
+  .game-info .view-toggle{padding:6px 8px;font-size:11px}
+  .turn-timer{top:40%;font-size:18px;padding:7px 14px}
+  .opponent-face{width:220px;min-height:82px}
+  .opponent-face .playingCards .hand{min-height:76px;max-width:220px}
+  .opponent-face .card{width:1.7em;height:2.45em;font-size:.75em}
+}
