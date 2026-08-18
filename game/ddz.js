@@ -64,6 +64,7 @@ function startBidding(state, message) {
   state.bidHistory = [];
   state.lastPlay = null;
   state.tablePlays = [null, null, null];
+  state.tablePasses = [false, false, false];
   state.passCount = 0;
   state.winner = null;
   state.log.push(`${message}，座位${state.firstBidder}开始叫地主`);
@@ -80,18 +81,45 @@ function finalizeLandlord(state) {
 }
 
 export function createGame(gameId = `ddz-${Date.now()}`) {
-  const state = { gameId, game: 'ddz', seq: 0, log: [] };
-  startBidding(state, '牌局创建');
-  return state;
+  return {
+    gameId,
+    game: 'ddz',
+    phase: 'waiting',
+    hands: [[], [], []],
+    bottom: [],
+    landlord: null,
+    firstBidder: null,
+    current: null,
+    bidStage: null,
+    bidRound: 0,
+    landlordCandidate: null,
+    robTurnsRemaining: 0,
+    bidHistory: [],
+    lastPlay: null,
+    tablePlays: [null, null, null],
+    tablePasses: [false, false, false],
+    passCount: 0,
+    winner: null,
+    seq: 0,
+    log: ['牌局创建，等待三家准备']
+  };
+}
+
+export function startGame(state) {
+  if (state.phase !== 'waiting') throw new Error('game_already_started');
+  startBidding(state, '对局开始');
+  state.seq++;
 }
 
 export function publicState(state, seatId = null, debug = false) {
-  return { gameId: state.gameId, game: state.game, phase: state.phase, landlord: state.landlord, firstBidder: state.firstBidder, current: state.current, bidStage: state.bidStage, bidRound: state.bidRound, landlordCandidate: state.landlordCandidate, robTurnsRemaining: state.robTurnsRemaining, bidHistory: state.bidHistory, lastPlay: state.lastPlay, tablePlays: state.tablePlays, passCount: state.passCount, winner: state.winner, seq: state.seq, bottom: state.phase === 'play' || state.phase === 'over' || debug ? state.bottom : [], hands: state.hands.map((h, i) => ({ seatId: i, count: h.length, cards: debug || i === seatId ? h : [] })), log: state.log.slice(-12) };
+  return { gameId: state.gameId, game: state.game, phase: state.phase, landlord: state.landlord, firstBidder: state.firstBidder, current: state.current, bidStage: state.bidStage, bidRound: state.bidRound, landlordCandidate: state.landlordCandidate, robTurnsRemaining: state.robTurnsRemaining, bidHistory: state.bidHistory, lastPlay: state.lastPlay, tablePlays: state.tablePlays, tablePasses: state.tablePasses, passCount: state.passCount, winner: state.winner, seq: state.seq, bottom: state.phase === 'play' || state.phase === 'over' || debug ? state.bottom : [], hands: state.hands.map((h, i) => ({ seatId: i, count: h.length, cards: debug || i === seatId ? h : [] })), log: state.log.slice(-12) };
 }
 
 export function applyAction(state, seatId, action) {
+  if (state.phase === 'waiting') throw new Error('game_not_started');
   if (state.winner !== null || state.current !== seatId) throw new Error('not_your_turn');
   state.tablePlays ||= [null, null, null];
+  state.tablePasses ||= [false, false, false];
   if (state.phase === 'bid') {
     if (action.type !== 'bid' || ![0, 1].includes(action.value)) throw new Error('invalid_bid');
     state.bidStage ||= 'call';
@@ -119,13 +147,15 @@ export function applyAction(state, seatId, action) {
   }
   if (action.type === 'pass') {
     if (!state.lastPlay) throw new Error('cannot_pass_first');
-    state.passCount++; state.log.push(`座位${seatId} 不要`); if (state.passCount >= 2) { state.lastPlay = null; state.tablePlays = [null, null, null]; state.passCount = 0; } state.current = (seatId + 1) % 3; state.seq++; return;
+    state.tablePasses[seatId] = true; state.passCount++; state.log.push(`座位${seatId} 不要`); if (state.passCount >= 2) { state.lastPlay = null; state.tablePlays = [null, null, null]; state.passCount = 0; } state.current = (seatId + 1) % 3; state.seq++; return;
   }
+  if (state.phase !== 'play') throw new Error('invalid_action');
   if (action.type !== 'play' || !Array.isArray(action.cards)) throw new Error('invalid_action');
   const hand = state.hands[seatId]; if (new Set(action.cards).size !== action.cards.length || action.cards.some(c => !hand.includes(c))) throw new Error('cards_not_in_hand');
   const play = describePlay(action.cards); if (!canBeat(play, state.lastPlay)) throw new Error('illegal_play');
   const playedCards = sortCards(action.cards);
-  state.hands[seatId] = hand.filter(c => !action.cards.includes(c)); state.lastPlay = { ...play, seatId, cards: playedCards }; state.tablePlays[seatId] = playedCards; state.passCount = 0; state.log.push(`座位${seatId} 出牌 ${action.cards.map(cardLabel).join(' ')}`);
+  if (!state.lastPlay) { state.tablePlays = [null, null, null]; state.tablePasses = [false, false, false]; }
+  state.tablePasses[seatId] = false; state.hands[seatId] = hand.filter(c => !action.cards.includes(c)); state.lastPlay = { ...play, seatId, cards: playedCards }; state.tablePlays[seatId] = playedCards; state.passCount = 0; state.log.push(`座位${seatId} 出牌 ${action.cards.map(cardLabel).join(' ')}`);
   if (state.hands[seatId].length === 0) { state.winner = state.landlord === seatId ? 'landlord' : 'farmers'; state.phase = 'over'; state.log.push(state.winner === 'landlord' ? '地主获胜' : '农民获胜'); } else state.current = (seatId + 1) % 3;
   state.seq++;
 }

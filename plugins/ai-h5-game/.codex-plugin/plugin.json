@@ -1,0 +1,24 @@
+{
+  "name": "ai-h5-game",
+  "version": "0.1.0+codex.20260818144414",
+  "description": "Connect Codex agents to the local Agent Arena Dou Dizhu game.",
+  "author": {
+    "name": "AI H5 Game Contributors"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "AI H5 Game",
+    "shortDescription": "Play Dou Dizhu through the local Agent Arena.",
+    "longDescription": "Connect a Codex agent to one seat in the independently running H5 Dou Dizhu game through its local MCP tools.",
+    "developerName": "AI H5 Game Contributors",
+    "category": "Entertainment",
+    "capabilities": [
+      "Interactive"
+    ],
+    "defaultPrompt": [
+      "Use $play-doudizhu to create a game and join one seat.",
+      "Use $play-doudizhu to observe my seat and take the next legal action."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

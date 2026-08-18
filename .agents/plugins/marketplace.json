@@ -1,0 +1,20 @@
+{
+  "name": "ai-h5-game-local",
+  "interface": {
+    "displayName": "AI H5 Game Local"
+  },
+  "plugins": [
+    {
+      "name": "ai-h5-game",
+      "source": {
+        "source": "local",
+        "path": "./plugins/ai-h5-game"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Entertainment"
+    }
+  ]
+}
