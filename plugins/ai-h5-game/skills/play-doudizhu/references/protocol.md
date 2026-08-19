@@ -1,6 +1,6 @@
 # Dou Dizhu Agent Protocol
 
-The local MCP server adapts seven tools to the application's HTTP `agent-game.v1` protocol. The application is the only source of truth.
+The local MCP server adapts game tools to the application's HTTP `agent-game.v1` protocol. The application is the only source of truth.
 
 ## Tools
 
@@ -8,6 +8,7 @@ The local MCP server adapts seven tools to the application's HTTP `agent-game.v1
 | --- | --- | --- |
 | `list_strategies` | List editable Markdown strategies | None |
 | `create_game` | Create a match | Turn timeout is fixed at 60000 ms (1 minute) |
+| `create_rematch` | Create an independent match from a completed deal | `sourceGameId` |
 | `join_game` | Claim or reconnect to a seat and lock a strategy snapshot | `gameId`, `seatId`, `agentId`; optional `displayName`, `strategyId` |
 | `observe_game` | Read one seat's private observation | `gameId`, `seatId` |
 | `start_game` | Mark the controlled seat ready; the third ready seat starts dealing | `gameId`, controlled `seatId` |
@@ -20,6 +21,7 @@ The local MCP server adapts seven tools to the application's HTTP `agent-game.v1
 ## Observation
 
 - `phase`: `waiting`, `bid`, `play`, or `over`.
+- `sourceGameId`: the completed baseline game for a same-deal rematch, otherwise null.
 - `seatControllers`: occupied seats and whether each is a player or Agent. Each controller has a stable `id` for reconnection and a public `displayName` for the table and replay.
 - `readySeats` and `allReady`: seats whose controllers have confirmed start, independent of merely joining.
 - `landlord`: final landlord seat during play; null while bidding is unresolved.
@@ -103,3 +105,7 @@ The review is saved in replay. It proposes updates to the selected Markdown stra
 ## Multi-round competition
 
 Each round has a new `gameId`; the enclosing `competitionId` owns `rounds`, `scores`, and cumulative settlement. Base scoring is zero-sum: landlord win `+2/-1/-1`, farmer win `-2/+1/+1`. The standard multiplier doubles once for each bomb, rocket, spring, or anti-spring condition. Settlement exposes `baseScore`, `multiplier`, `multiplierReasons`, `bombCount`, `rocketCount`, `spring`, `antiSpring`, and `playsBySeat`; `scoreDelta` already includes the multiplier. Round reviews are for immediate adjustment. The final competition review should only retain recurring problems and validated improvements; it should suggest Markdown edits but never modify the file automatically.
+
+## Same-deal rematch
+
+Call `create_rematch` only with a completed source `gameId`. The new game copies the source's initial hands, bottom cards, and first bidder, but it does not copy controllers, readiness, strategies, decisions, scores, or competition membership. Join the returned `gameId`, select the strategy for each Agent again, and wait for all three seats to call `start_game`. Use `sourceGameId` to group outcomes; model output may remain nondeterministic even when the deal is identical.

@@ -25,6 +25,18 @@ const tools = [
     }
   },
   {
+    name: 'create_rematch',
+    description: 'Create an independent game with the same initial hands, bottom cards, and first bidder as a completed source game.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sourceGameId: { type: 'string', description: 'Completed source gameId to replay with new seats and strategies.' }
+      },
+      required: ['sourceGameId'],
+      additionalProperties: false
+    }
+  },
+  {
     name: 'create_competition',
     description: 'Create a 3, 5, or 7-round Dou Dizhu competition. The first gameId is returned for seat joins.',
     inputSchema: {
@@ -199,6 +211,9 @@ async function callTool(name, args) {
       method: 'POST',
       body: JSON.stringify(args)
     });
+  }
+  if (name === 'create_rematch') {
+    return request(`/api/replays/${encodeURIComponent(args.sourceGameId)}/rematch`, { method: 'POST', body: '{}' });
   }
   if (name === 'create_competition') {
     return request('/agent/v1/competitions', { method: 'POST', body: JSON.stringify(args) });

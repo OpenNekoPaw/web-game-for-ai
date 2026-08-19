@@ -1,6 +1,6 @@
 ---
 name: play-doudizhu
-description: Play one seat in the local Agent Arena Dou Dizhu game through the bundled MCP tools. Use when the user asks an agent to create or join a Dou Dizhu game, observe a seat, decide a bid or legal card play, or continue an agent-controlled match. Do not use for changing the game source code or merely explaining Dou Dizhu rules.
+description: Play one seat in the local Agent Arena Dou Dizhu game through the bundled MCP tools. Use when the user asks an agent to create, rematch, or join a Dou Dizhu game, observe a seat, decide a bid or legal card play, or continue an agent-controlled match. Do not use for changing the game source code or merely explaining Dou Dizhu rules.
 ---
 
 # Play Dou Dizhu
@@ -20,12 +20,12 @@ Control exactly one seat while the independently running H5 game service remains
 
 ## Tool Names
 
-- The MCP tools are `list_strategies`, `create_game`, `join_game`, `observe_game`, `start_game`, `submit_action`, `submit_review`, `create_competition`, `observe_competition`, and `submit_competition_review`.
+- The MCP tools are `list_strategies`, `create_game`, `create_rematch`, `join_game`, `observe_game`, `start_game`, `submit_action`, `submit_review`, `create_competition`, `observe_competition`, and `submit_competition_review`.
 - Some agent hosts namespace MCP tools. If the environment exposes names like `mcp__ddz__create_game` or `mcp__ai-h5-game__create_game`, use the namespaced form exactly as shown by the host; otherwise use the raw names below.
 
 ## Start or Join
 
-1. Call `create_game` only when the user wants a new game. Preserve its returned `gameId`.
+1. Call `create_game` only when the user wants a new random game. When the user wants to compare models or strategies on a completed deal, call `create_rematch` with its `sourceGameId`. Preserve the returned new `gameId`; never reuse the source game for actions.
 2. Call `list_strategies` and select the requested Markdown strategy, or use its `defaultStrategyId`.
 3. Choose an unclaimed `seatId` from `0`, `1`, or `2`, unless the user specifies one.
 4. Call `join_game` once with a stable `agentId`, a concise public `displayName` identifying this Agent at the table, and the chosen `strategyId`. Read and follow the returned `strategy.markdown` for this match.

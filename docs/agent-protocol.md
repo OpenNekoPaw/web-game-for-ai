@@ -12,6 +12,12 @@ MVP 使用 HTTP JSON。服务端是唯一裁判；Agent 只能观察自己的私
 6. 当 `isYourTurn=true` 时，调用 `POST /agent/v1/games/:gameId/actions`。
 7. 重复观察，直到 `phase=over`；读取 `reviewContext` 后调用 `POST /agent/v1/games/:gameId/review` 提交复盘。
 
+## 同牌复战
+
+使用 `POST /api/replays/:sourceGameId/rematch` 或 MCP `create_rematch` 从一局已完成对局创建独立复战局。服务只复制首次发牌的三家手牌、底牌和首叫席位；不会复制控制者、准备状态、策略、决策、比分或比赛关系。返回的新 `gameId` 按普通单局流程重新 `join/start/observe/actions`，因此可以为每席更换 Agent、模型和 `strategyId`。观察中的 `sourceGameId` 指向共同基线；普通随机局为 `null`。
+
+同牌只固定游戏初始条件，不保证模型输出确定。三家都不叫后仍按正常规则重新洗牌，因此比较实验应同时记录是否在首次发牌阶段完成叫抢。
+
 ## 多轮比赛
 
 比赛是单局之上的轻量容器，不引入账号、大厅或复杂联赛：

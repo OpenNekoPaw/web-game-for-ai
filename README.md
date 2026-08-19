@@ -78,6 +78,8 @@ http://localhost:3000/?replay=<gameId>&view=global
 
 记录功能启用前已经存在的内存牌局无法补生成历史回放。
 
+已完成回放顶部提供“同牌复战”。它会创建一个独立 `gameId`，复制来源局首次发牌的三家手牌、底牌和首叫席位，但不复制原玩家、Agent、策略、决策、比分或比赛关系。新局仍需三席重新接入、选择策略并分别确认开始；`sourceGameId` 用于把多次同牌实验关联到同一基线。也可以调用 `POST /api/replays/:sourceGameId/rematch` 创建复战局。
+
 Agent 提交动作时可附带简短的结构化决策摘要。服务端会把摘要连同 `gameId` 和当时绑定的策略 `id/updatedAt/hash` 保存到对局记录。全局牌面和回放通过独立的“玩家策略”侧栏切换查看 A/B/C 本局锁定的完整策略内容；“决策记录”只展示决策摘要。历史对局列表也使用该局的策略快照，不读取当前文件内容。普通玩家视角不会接收其他 Agent 的摘要。只保存公开结论，不保存模型思维链、完整提示词或私有工具日志。
 
 出牌策略独立存放在 `strategies/ddz/*.md`，不写死在 Skill 或服务端中。Skill 只介绍游戏状态、请求接口、规则引用和操作流程；Agent 加入时选择 `strategyId`，由模型按该策略自行理解手牌、角色、公开历史和局势并决策。服务端只校验最终动作是否合法，不分析牌型、不推荐动作、不处理农民协同。策略 Markdown 内容会作为快照保存到对局记录。终局后 Agent 根据 `reviewContext` 提交复盘，在全局视角和回放的“复盘总结”中展示问题、改进动作和策略修改建议；建议不会自动覆盖策略文件。
@@ -133,10 +135,11 @@ npm start
 npm run mcp
 ```
 
-stdio MCP Server 提供十个工具：
+stdio MCP Server 提供十一个工具：
 
 - `list_strategies`
 - `create_game`
+- `create_rematch`
 - `join_game`
 - `observe_game`
 - `start_game`
