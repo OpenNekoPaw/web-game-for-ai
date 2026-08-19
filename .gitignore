@@ -1,5 +1,6 @@
 # Dependencies
 node_modules/
+.bun/
 
 # Match data and runtime state
 records/
@@ -20,6 +21,12 @@ build/
 .cache/
 .tmp/
 tmp/
+
+# Downloaded or extracted binary releases
+/ddz-server
+/share/
+agent-game-ddz-linux-*.tar.gz
+agent-game-ddz-linux-*.sha256
 
 # Local Agent verification artifacts
 test/verify-seat-*.md
