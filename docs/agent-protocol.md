@@ -52,7 +52,7 @@ H5 等待界面中央提供 `1/3/5/7 局`设置。选择 3、5 或 7 局会创�
 
 ## 观察
 
-观察包含 `seq`、当前阶段、轮到的座位、自己的手牌、其他座位剩余牌数、公共出牌信息和 `roleContext`。`roleContext.previousSeat/nextSeat` 表示相对当前座位的前一位和后一位；`farmerPosition` 明确表示 `landlord_upstream`（地主上家，本席行动后紧接地主）或 `landlord_downstream`（地主下家，地主行动后紧接本席），并返回 `landlordSeat`、`teammateSeat`、`landlordUpstreamSeat` 和 `landlordDownstreamSeat`。叫地主结束前，角色相关字段为 `null`。兼容字段 `upstreamSeat/downstreamSeat` 分别等于 `previousSeat/nextSeat`，不得用来选择地主上下家策略。`phase=waiting` 时不发牌、不计时、不可提交游戏动作；`readySeats` 只包含已确认准备的座位，`allReady` 表示三席是否均已准备。其他玩家的 `cards` 始终为空；`tablePlays` 表示本轮三家已经打出的牌，`tablePasses` 表示对应座位是否显示“不要”。`turnDeadlineAt` 是服务端回合截止时间，Agent 应在此时间前提交动作。实时私有观察中的 `decisions` 始终为空，避免向玩家泄露其他 Agent 的策略摘要。
+观察包含 `seq`、当前阶段、轮到的座位、自己的手牌、其他座位剩余牌数、公共出牌信息和 `roleContext`。`hands[].cards`、`lastPlay.cards`、`tablePlays` 和 `bottom` 中的每张牌都是 `{id, rank, suit, label, strength}` 对象：Agent 使用 `rank/label/strength` 理解牌面，只把 `id` 放入动作。这样牌面语义与机器标识绑定，不需要通过平行数组下标对应，也不要求模型把数字重新映射成 A、2 或王。`lastPlay=null` 且 `current=you` 表示本席拥有实际领牌权；`lastPlay` 非空时，其出牌者只是当前最大牌持有者。`passCount=0` 时不要会把响应交给下一席，`passCount=1` 时再不要则清墩，并由下一席（当前 `lastPlay.seatId`）领牌。`roleContext.previousSeat/nextSeat` 表示相对当前座位的前一位和后一位；`farmerPosition` 明确表示 `landlord_upstream`（地主上家，本席行动后紧接地主）或 `landlord_downstream`（地主下家，地主行动后紧接本席），并返回 `landlordSeat`、`teammateSeat`、`landlordUpstreamSeat` 和 `landlordDownstreamSeat`。叫地主结束前，角色相关字段为 `null`。兼容字段 `upstreamSeat/downstreamSeat` 分别等于 `previousSeat/nextSeat`，不得用来选择地主上下家策略。`phase=waiting` 时不发牌、不计时、不可提交游戏动作；`readySeats` 只包含已确认准备的座位，`allReady` 表示三席是否均已准备。其他玩家的 `cards` 始终为空；`tablePlays` 表示本轮三家已经打出的牌，`tablePasses` 表示对应座位是否显示“不要”。`turnDeadlineAt` 是服务端回合截止时间，Agent 应在此时间前提交动作。实时私有观察中的 `decisions` 始终为空，避免向玩家泄露其他 Agent 的策略摘要。
 
 ```json
 {
@@ -76,9 +76,17 @@ H5 等待界面中央提供 `1/3/5/7 局`设置。选择 3、5 或 7 局会创�
   "turnTimeoutMs": 60000,
   "turnDeadlineAt": 1787017000000,
   "serverNow": 1787016940000,
-  "tablePlays": [["3:0"], null, ["4:1"]],
+  "cardEncoding": {
+    "ranks": {"14": "A", "15": "2", "16": "小王", "17": "大王"},
+    "suits": {"0": "♠", "1": "♥", "2": "♣", "3": "♦"}
+  },
+  "tablePlays": [[{"id":"3:0","rank":"3","suit":"spades","label":"3♠","strength":3}], null, [{"id":"4:1","rank":"4","suit":"hearts","label":"4♥","strength":4}]],
   "hands": [
-    {"seatId": 0, "count": 19, "cards": ["3:0"]},
+    {"seatId": 0, "count": 19, "cards": [
+      {"id":"14:0","rank":"A","suit":"spades","label":"A♠","strength":14},
+      {"id":"14:1","rank":"A","suit":"hearts","label":"A♥","strength":14},
+      {"id":"15:0","rank":"2","suit":"spades","label":"2♠","strength":15}
+    ]},
     {"seatId": 1, "count": 16, "cards": []},
     {"seatId": 2, "count": 17, "cards": []}
   ]

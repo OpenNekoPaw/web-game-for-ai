@@ -1,10 +1,34 @@
 const SUITS = ['S', 'H', 'C', 'D'];
+const SUIT_SYMBOLS = ['♠', '♥', '♣', '♦'];
+const SUIT_NAMES = ['spades', 'hearts', 'clubs', 'diamonds'];
 const RANKS = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 const rankLabel = (rank) => ({11:'J',12:'Q',13:'K',14:'A',15:'2',16:'BJ',17:'RJ'}[rank] || String(rank));
+
+export const CARD_ENCODING = Object.freeze({
+  ranks: Object.freeze({ 3:'3', 4:'4', 5:'5', 6:'6', 7:'7', 8:'8', 9:'9', 10:'10', 11:'J', 12:'Q', 13:'K', 14:'A', 15:'2', 16:'小王', 17:'大王' }),
+  suits: Object.freeze({ 0:'♠', 1:'♥', 2:'♣', 3:'♦' }),
+  rankOrder: Object.freeze(['3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A', '2', '小王', '大王'])
+});
 
 export function cardLabel(card) {
   const [rank, suit] = card.split(':').map(Number);
   return rank >= 16 ? rankLabel(rank) : `${rankLabel(rank)}${SUITS[suit]}`;
+}
+
+export function cardDisplayLabel(card) {
+  const [rank, suit] = card.split(':').map(Number);
+  return rank === 16 ? '小王' : rank === 17 ? '大王' : `${rankLabel(rank)}${SUIT_SYMBOLS[suit]}`;
+}
+
+export function cardView(card) {
+  const [strength, suitIndex] = card.split(':').map(Number);
+  return {
+    id: card,
+    rank: strength === 16 ? 'small_joker' : strength === 17 ? 'big_joker' : rankLabel(strength),
+    suit: strength >= 16 ? null : SUIT_NAMES[suitIndex],
+    label: cardDisplayLabel(card),
+    strength
+  };
 }
 
 export function createDeck() {
@@ -120,7 +144,43 @@ export function startGame(state) {
 }
 
 export function publicState(state, seatId = null, debug = false) {
-  return { gameId: state.gameId, game: state.game, phase: state.phase, landlord: state.landlord, firstBidder: state.firstBidder, firstCaller: state.firstCaller, current: state.current, bidStage: state.bidStage, bidRound: state.bidRound, landlordCandidate: state.landlordCandidate, robTurnsRemaining: state.robTurnsRemaining, bidHistory: state.bidHistory, lastPlay: state.lastPlay, tablePlays: state.tablePlays, tablePasses: state.tablePasses, passCount: state.passCount, playsBySeat: state.playsBySeat || [0, 0, 0], bombCount: state.bombCount || 0, rocketCount: state.rocketCount || 0, winner: state.winner, seq: state.seq, bottom: state.phase === 'play' || state.phase === 'over' || debug ? state.bottom : [], hands: state.hands.map((h, i) => ({ seatId: i, count: h.length, cards: debug || i === seatId ? h : [] })), log: state.log.slice(-12) };
+  const revealBottom = state.phase === 'play' || state.phase === 'over' || debug;
+  const bottom = revealBottom ? state.bottom : [];
+  const tablePlays = state.tablePlays || [null, null, null];
+  const lastPlay = state.lastPlay
+    ? { ...state.lastPlay, cards: (state.lastPlay.cards || []).map(cardView) }
+    : null;
+
+  return {
+    gameId: state.gameId,
+    game: state.game,
+    phase: state.phase,
+    landlord: state.landlord,
+    firstBidder: state.firstBidder,
+    firstCaller: state.firstCaller,
+    current: state.current,
+    bidStage: state.bidStage,
+    bidRound: state.bidRound,
+    landlordCandidate: state.landlordCandidate,
+    robTurnsRemaining: state.robTurnsRemaining,
+    bidHistory: state.bidHistory,
+    cardEncoding: CARD_ENCODING,
+    lastPlay,
+    tablePlays: tablePlays.map((cards) => cards?.map(cardView) || null),
+    tablePasses: state.tablePasses,
+    passCount: state.passCount,
+    playsBySeat: state.playsBySeat || [0, 0, 0],
+    bombCount: state.bombCount || 0,
+    rocketCount: state.rocketCount || 0,
+    winner: state.winner,
+    seq: state.seq,
+    bottom: bottom.map(cardView),
+    hands: state.hands.map((hand, index) => {
+      const cards = debug || index === seatId ? hand : [];
+      return { seatId: index, count: hand.length, cards: cards.map(cardView) };
+    }),
+    log: state.log.slice(-12)
+  };
 }
 
 export function applyAction(state, seatId, action) {

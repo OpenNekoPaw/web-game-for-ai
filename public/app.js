@@ -657,7 +657,7 @@ function renderHand(cards) {
   const hand = $('my-hand'); hand.innerHTML = '';
   const wrapper = document.createElement('div'); wrapper.className = 'playingCards loose';
   const list = document.createElement('ul'); list.className = 'hand';
-  cards.forEach((card) => { const item = document.createElement('li'); const element = document.createElement('button'); const face = cardFace(card); element.type = 'button'; element.className = `card ${face.className} ${selected.has(card) ? 'selected' : ''}`; element.innerHTML = `<span class="rank">${face.rank}</span><span class="suit">${face.suit}</span>`; element.title = face.label; element.disabled = replayMode; element.onclick = () => { selected.has(card) ? selected.delete(card) : selected.add(card); renderHand(cards); }; item.appendChild(element); list.appendChild(item); });
+  cards.forEach((card) => { const item = document.createElement('li'); const element = document.createElement('button'); const face = cardFace(card); const id = cardId(card); element.type = 'button'; element.className = `card ${face.className} ${selected.has(id) ? 'selected' : ''}`; element.innerHTML = `<span class="rank">${face.rank}</span><span class="suit">${face.suit}</span>`; element.title = face.label; element.disabled = replayMode; element.onclick = () => { selected.has(id) ? selected.delete(id) : selected.add(id); renderHand(cards); }; item.appendChild(element); list.appendChild(item); });
   wrapper.appendChild(list); hand.appendChild(wrapper);
 }
 
@@ -689,7 +689,8 @@ function renderTablePlays() {
   });
 }
 
-function cardFace(card) { const [rank, suit] = card.split(':').map(Number); if (rank === 16) return { className:'joker', rank:'小', suit:'王', label:'小王' }; if (rank === 17) return { className:'joker', rank:'大', suit:'王', label:'大王' }; const rankText = ({11:'J',12:'Q',13:'K',14:'A',15:'2'}[rank] || String(rank)); const suits = [{name:'spades',symbol:'♠'},{name:'hearts',symbol:'♥'},{name:'clubs',symbol:'♣'},{name:'diams',symbol:'♦'}]; const face = suits[suit] || suits[0]; return { className:`rank-${rankText.toLowerCase()} ${face.name}`, rank:rankText, suit:face.symbol, label:`${rankText}${face.symbol}` }; }
+function cardId(card) { return typeof card === 'string' ? card : card?.id; }
+function cardFace(card) { const [rank, suit] = cardId(card).split(':').map(Number); if (rank === 16) return { className:'joker', rank:'小', suit:'王', label:card?.label || '小王' }; if (rank === 17) return { className:'joker', rank:'大', suit:'王', label:card?.label || '大王' }; const rankText = typeof card === 'object' && card.rank ? card.rank : ({11:'J',12:'Q',13:'K',14:'A',15:'2'}[rank] || String(rank)); const suits = [{name:'spades',symbol:'♠'},{name:'hearts',symbol:'♥'},{name:'clubs',symbol:'♣'},{name:'diams',symbol:'♦'}]; const face = suits[suit] || suits[0]; return { className:`rank-${String(rankText).toLowerCase()} ${face.name}`, rank:rankText, suit:face.symbol, label:card?.label || `${rankText}${face.symbol}` }; }
 
 async function action(payload) {
   if (!controlActive || seat !== controlledSeat) return showMessage('当前仅为观察视角，请切回已加入的玩家座位', true);
