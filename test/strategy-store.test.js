@@ -14,6 +14,7 @@ test('default strategy is one complete replaceable plan', () => {
   for (const section of [
     '## 叫地主与抢地主',
     '## 手牌感知与决策流程',
+    '## 牌权与出完手数',
     '## 地主策略',
     '## 农民协作',
     '## 地主上家策略',
@@ -21,6 +22,14 @@ test('default strategy is one complete replaceable plan', () => {
     '## 一张牌与少牌残局',
     '## 复盘关注'
   ]) assert.ok(strategy.markdown.includes(section), `missing strategy section: ${section}`);
+  assert.match(strategy.markdown, /lastPlay=null.*current=you.*实际领牌权/);
+  assert.match(strategy.markdown, /passCount=0/);
+  assert.match(strategy.markdown, /passCount=1/);
+  assert.match(strategy.markdown, /还需 N 手/);
+  assert.match(strategy.markdown, /当前动作 -> 剩余合法组合 -> 每次继续出牌的牌权来源/);
+  assert.match(strategy.markdown, /本席剩两张/);
+  assert.match(strategy.markdown, /枚举所有合法单牌响应/);
+  assert.match(strategy.markdown, /剩余 N 手、确定\/非确定、下一次牌权来源/);
 });
 
 test('unknown strategy ids are rejected instead of composed with default', () => {
