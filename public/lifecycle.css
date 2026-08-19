@@ -149,9 +149,9 @@
 
 .table { transition: right .18s ease; }
 .table.decisions-open { right: 380px; }
-.game-info #strategy-record.active, .game-info #decision-record.active, .game-info #review-record.active, .game-info #game-record.active, .game-info #agent-connect.active { background: var(--gold); color: #5b3b04; }
+.game-info #strategy-record.active, .game-info #decision-record.active, .game-info #review-record.active, .game-info #game-record.active, .game-info #invite-game.active { background: var(--gold); color: #5b3b04; }
 
-.agent-type-menu {
+.agent-type-menu, .invite-menu {
   position: fixed;
   z-index: 30;
   width: 218px;
@@ -161,12 +161,22 @@
   background: #123f7cf7;
   box-shadow: 0 12px 28px #08244c88;
 }
-.agent-type-menu[hidden] { display: none; }
+.agent-type-menu[hidden], .invite-menu[hidden] { display: none; }
 .agent-type-menu button { display: block; width: 100%; padding: 9px 10px; border: 0; border-radius: 6px; background: transparent; color: #fff; text-align: left; cursor: pointer; }
 .agent-type-menu button:hover, .agent-type-menu button:focus-visible { outline: none; background: #2a5d98; }
 .agent-type-menu strong, .agent-type-menu small { display: block; }
 .agent-type-menu strong { font-size: 13px; }
 .agent-type-menu small { margin-top: 3px; color: var(--muted); font-size: 11px; }
+.invite-menu { width: 238px; padding: 10px; }
+.invite-menu > strong { display: block; margin: 2px 2px 7px; color: var(--muted); font-size: 11px; }
+.invite-menu > strong:not(:first-child) { margin-top: 12px; }
+.invite-menu > small { display: block; margin: 9px 2px 1px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.invite-seats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+.invite-seats button, .invite-spectator { min-width: 0; border: 1px solid #d0e6ff55; border-radius: 6px; background: #082b5d; color: #fff; font: inherit; font-weight: 800; cursor: pointer; }
+.invite-seats button { height: 34px; }
+.invite-spectator { width: 100%; margin-top: 12px; padding: 9px; }
+.invite-seats button:hover, .invite-spectator:hover { border-color: var(--gold); background: #285d98; }
+.invite-seats button:disabled { cursor: default; opacity: .35; }
 .agent-connect-description { margin: 2px 2px 18px; color: #eef7ff; font-size: 14px; line-height: 1.6; }
 .agent-connect-label { display: block; margin: 0 2px 7px; color: var(--gold); font-size: 13px; }
 .agent-connect-code { max-width: 100%; margin: 0; overflow: auto; padding: 12px; border: 1px solid #d0e6ff33; border-radius: 7px; background: #071f43; color: #eef7ff; font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre; user-select: text; }

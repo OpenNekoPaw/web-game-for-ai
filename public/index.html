@@ -6,8 +6,8 @@
   <title>斗地主</title>
   <link rel="stylesheet" href="/public/cards.css?v=2" />
   <link rel="stylesheet" href="/public/styles.css?v=5" />
-  <link rel="stylesheet" href="/public/header.css?v=3" />
-  <link rel="stylesheet" href="/public/lifecycle.css?v=15" />
+  <link rel="stylesheet" href="/public/header.css?v=4" />
+  <link rel="stylesheet" href="/public/lifecycle.css?v=16" />
   <link rel="stylesheet" href="/public/cards-adapter.css?v=10" />
 </head>
 <body>
@@ -19,6 +19,7 @@
         <span id="score-info" class="score-info" aria-label="比赛比分" hidden></span>
       </div>
       <div class="game-info">
+        <button id="invite-game" type="button" aria-haspopup="menu" aria-controls="invite-menu" aria-expanded="false">邀请</button>
         <button id="global-view" class="view-toggle" type="button" aria-pressed="false">全局牌面</button>
         <nav class="perspectives" aria-label="切换视角"><button data-seat="0" type="button">A</button><button data-seat="1" type="button">B</button><button data-seat="2" type="button">C</button></nav>
         <div id="replay-controls" class="replay-controls" aria-label="回放控制" hidden>
@@ -40,7 +41,14 @@
       <div id="agent-type-menu" class="agent-type-menu" role="menu" aria-label="选择 Agent 类型" hidden>
         <button type="button" role="menuitem" data-agent-type="codex"><strong>Codex</strong><small>插件包含 Skill 与 MCP</small></button>
         <button type="button" role="menuitem" data-agent-type="mcp"><strong>通用 MCP</strong><small>适用于支持 MCP 的客户端</small></button>
-        <button type="button" role="menuitem" data-agent-type="http"><strong>HTTP Agent</strong><small>适用于脚本和自研 Agent</small></button>
+      </div>
+      <div id="invite-menu" class="invite-menu" role="menu" aria-label="邀请加入对局" hidden>
+        <strong>邀请玩家</strong>
+        <div class="invite-seats"><button type="button" data-invite-type="player" data-invite-seat="0">A</button><button type="button" data-invite-type="player" data-invite-seat="1">B</button><button type="button" data-invite-type="player" data-invite-seat="2">C</button></div>
+        <strong>邀请 Agent</strong>
+        <div class="invite-seats"><button type="button" data-invite-type="agent" data-invite-seat="0">A</button><button type="button" data-invite-type="agent" data-invite-seat="1">B</button><button type="button" data-invite-type="agent" data-invite-seat="2">C</button></div>
+        <button class="invite-spectator" type="button" data-invite-type="spectator" data-invite-seat="0">复制观战链接</button>
+        <small>座位邀请 30 分钟内有效，观战链接可重复打开</small>
       </div>
     </header>
     <section id="game-table" class="table">
@@ -76,6 +84,6 @@
       <div id="message" class="message" role="status"></div>
     </section>
   </main>
-  <script type="module" src="/public/app.js?v=35"></script>
+  <script type="module" src="/public/app.js?v=36"></script>
 </body>
 </html>

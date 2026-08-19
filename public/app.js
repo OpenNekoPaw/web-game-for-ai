@@ -2,6 +2,7 @@ const params = new URLSearchParams(location.search);
 const replayGameId = params.get('replay');
 const replayMode = Boolean(replayGameId);
 const replayReturn = params.get('return');
+const inviteToken = params.get('invite');
 let gameId = params.get('game');
 let competitionId = params.get('competition');
 let seat = normalizeSeat(params.get('seat'));
@@ -15,8 +16,8 @@ let replay = null;
 let replayIndex = 0;
 let replayTimer = null;
 let replayCanRematch = false;
+let activeInvite = null;
 let selected = new Set();
-let botBusy = false;
 let refreshing = false;
 let messageTimer = null;
 let serverClockOffsetMs = 0;
@@ -34,10 +35,11 @@ const post = (path, data = {}) => fetch(path, { method: 'POST', headers: { 'cont
 
 function normalizeSeat(value) { const parsed = Number(value); return [0, 1, 2].includes(parsed) ? parsed : 0; }
 function normalizeView(value) { return value === 'global' ? 'global' : 'player'; }
-function syncUrl() { const next = new URL(location.href); next.searchParams.set('seat', seat); if (replayMode) { next.searchParams.set('replay', replayGameId); next.searchParams.delete('game'); next.searchParams.delete('competition'); next.searchParams.delete('control'); } else { if (controlRequested) next.searchParams.set('control', controlledSeat); else next.searchParams.delete('control'); if (gameId) next.searchParams.set('game', gameId); if (competitionId) next.searchParams.set('competition', competitionId); else next.searchParams.delete('competition'); } if (view === 'global') next.searchParams.set('view', 'global'); else next.searchParams.delete('view'); history.replaceState(null, '', next); }
+function syncUrl() { const next = new URL(location.href); next.searchParams.set('seat', seat); if (replayMode) { next.searchParams.set('replay', replayGameId); next.searchParams.delete('game'); next.searchParams.delete('competition'); next.searchParams.delete('control'); next.searchParams.delete('invite'); } else if (activeInvite) { next.searchParams.set('invite', activeInvite.token); next.searchParams.delete('game'); next.searchParams.delete('competition'); next.searchParams.delete('control'); } else { next.searchParams.delete('invite'); if (controlRequested) next.searchParams.set('control', controlledSeat); else next.searchParams.delete('control'); if (gameId) next.searchParams.set('game', gameId); if (competitionId) next.searchParams.set('competition', competitionId); else next.searchParams.delete('competition'); } if (view === 'global') next.searchParams.set('view', 'global'); else next.searchParams.delete('view'); history.replaceState(null, '', next); }
 function showMessage(text, error = false) { clearTimeout(messageTimer); const element = $('message'); element.textContent = text; element.className = `message visible ${error ? 'error' : ''}`; messageTimer = setTimeout(() => { element.className = 'message'; }, 2200); }
 
 function setAgentTypeMenu(open) {
+  if (open) setInviteMenu(false);
   const menu = $('agent-type-menu');
   const button = $('agent-connect');
   menu.hidden = !open;
@@ -49,6 +51,64 @@ function setAgentTypeMenu(open) {
   menu.style.left = `${Math.max(8, Math.min(rect.left, innerWidth - menuWidth - 8))}px`;
   menu.style.top = `${rect.bottom + 7}px`;
   menu.querySelector('button')?.focus();
+}
+
+function setInviteMenu(open) {
+  const menu = $('invite-menu');
+  const button = $('invite-game');
+  menu.hidden = !open;
+  button.classList.toggle('active', open);
+  button.setAttribute('aria-expanded', String(open));
+  if (!open) return;
+  setAgentTypeMenu(false);
+  renderInviteMenu();
+  const rect = button.getBoundingClientRect();
+  const menuWidth = 238;
+  menu.style.left = `${Math.max(8, Math.min(rect.left, innerWidth - menuWidth - 8))}px`;
+  menu.style.top = `${rect.bottom + 7}px`;
+  menu.querySelector('button:not(:disabled)')?.focus();
+}
+
+function renderInviteMenu() {
+  const waiting = state?.phase === 'waiting';
+  document.querySelectorAll('[data-invite-type][data-invite-seat]').forEach((button) => {
+    if (button.dataset.inviteType === 'spectator') { button.disabled = !gameId; return; }
+    const seatId = Number(button.dataset.inviteSeat);
+    button.disabled = !waiting || Boolean(state?.seatControllers?.[seatId]);
+    button.title = state?.seatControllers?.[seatId] ? '该座位已被占用' : '';
+  });
+}
+
+async function createInvite(inviteType, seatId) {
+  if (!gameId) return;
+  try {
+    const { response, data } = await post(`/api/games/${encodeURIComponent(gameId)}/invites`, { inviteType, seatId });
+    if (!response.ok) throw new Error(data.error || 'invite_failed');
+    const url = inviteType === 'agent'
+      ? new URL(`/agent/v1/invites/${encodeURIComponent(data.token)}`, location.origin)
+      : new URL(`/?invite=${encodeURIComponent(data.token)}`, location.origin);
+    const copied = await copyText(url.href);
+    setInviteMenu(false);
+    const label = inviteType === 'spectator' ? '观战链接' : `${inviteType === 'agent' ? 'Agent' : '玩家'} ${['A', 'B', 'C'][seatId]} 邀请链接`;
+    showMessage(copied ? `${label}已复制` : `${label}复制失败`, !copied);
+  } catch (error) {
+    showMessage(`创建邀请失败：${errorText(error.message)}`, true);
+  }
+}
+
+async function resolveInvite() {
+  const response = await fetch(`/api/invites/${encodeURIComponent(inviteToken)}`);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'invite_not_found');
+  if (!['player', 'spectator'].includes(data.inviteType)) throw new Error('invite_type_mismatch');
+  activeInvite = data;
+  gameId = data.gameId;
+  competitionId = data.competitionId || null;
+  seat = normalizeSeat(data.seatId);
+  controlledSeat = seat;
+  controlRequested = data.inviteType === 'player';
+  view = data.inviteType === 'spectator' ? 'global' : 'player';
+  syncUrl();
 }
 
 function setAgentPanel(open, type = selectedAgentType) {
@@ -85,7 +145,6 @@ async function loadAgentGuide() {
 function renderAgentConnect(type) {
   const content = $('agent-connect-content');
   const origin = location.origin;
-  const connection = JSON.stringify({ protocol:'agent-game.v1', serverUrl:origin, gameId:gameId || null, seatId:seat }, null, 2);
   const presets = {
     codex: {
       title: 'Codex 接入',
@@ -96,17 +155,10 @@ function renderAgentConnect(type) {
     },
     mcp: {
       title: '通用 MCP 接入',
-      description: '适用于支持 STDIO MCP 的 Agent 客户端。将项目路径替换为本机绝对路径。',
+      description: '适用于支持远程 MCP 的 Agent。MCP Server 运行在游戏服务端，不需要安装本地连接器。',
       label: 'MCP 配置',
-      value: JSON.stringify({ mcpServers:{ 'ai-h5-game':{ command:'node', args:['/绝对路径/ai-h5-game/mcp-server.js'], env:{ DDZ_SERVER_URL:origin } } } }, null, 2),
-      note: '连接后使用 create_game、join_game、observe_game 和 submit_action 等工具。'
-    },
-    http: {
-      title: 'HTTP Agent 接入',
-      description: '适用于脚本、自研 Agent 和不支持 MCP 的模型运行环境。',
-      label: '当前连接信息',
-      value: connection,
-      note: 'Agent 通过 /agent/v1 接口加入座位、观察状态并提交动作。'
+      value: JSON.stringify({ mcpServers:{ 'ai-h5-game':{ url:`${origin}/mcp` } } }, null, 2),
+      note: '收到 Agent 邀请链接后使用 join_invite；本地策略由 Agent 自己读取，不上传游戏服务。'
     }
   };
   const preset = presets[type] || presets.mcp;
@@ -182,7 +234,7 @@ async function copyText(value) {
 }
 
 async function create(rounds = 1) {
-  try { const totalRounds = [3, 5, 7].includes(Number(rounds)) ? Number(rounds) : 1; const { response, data } = totalRounds === 1 ? await post('/api/games') : await post('/api/competitions', { totalRounds }); if (!response.ok) throw new Error(data.error || 'create_failed'); gameId = totalRounds === 1 ? data.gameId : data.currentGameId; competitionId = totalRounds === 1 ? null : data.competitionId; selectedRounds = totalRounds; controlActive = false; playerJoinAttempt = null; strategyParticipants = {}; strategySnapshotGameId = null; selected.clear(); syncUrl(); await refresh(); }
+  try { const totalRounds = [3, 5, 7].includes(Number(rounds)) ? Number(rounds) : 1; const { response, data } = totalRounds === 1 ? await post('/api/games') : await post('/api/competitions', { totalRounds }); if (!response.ok) throw new Error(data.error || 'create_failed'); activeInvite = null; gameId = totalRounds === 1 ? data.gameId : data.currentGameId; competitionId = totalRounds === 1 ? null : data.competitionId; selectedRounds = totalRounds; controlActive = false; playerJoinAttempt = null; strategyParticipants = {}; strategySnapshotGameId = null; selected.clear(); syncUrl(); await refresh(); }
   catch (error) { setConnectionError(error); }
 }
 
@@ -191,7 +243,10 @@ async function ensurePlayerJoined() {
   playerJoinAttempt = gameId;
   const playerId = localPlayerId(competitionId || gameId, controlledSeat);
   const displayName = String(params.get('name') || `玩家 ${['A', 'B', 'C'][controlledSeat]}`).trim().slice(0, 40);
-  const { response, data } = await post(`/api/games/${gameId}/join`, { seatId: controlledSeat, playerId, displayName });
+  const path = activeInvite?.inviteType === 'player'
+    ? `/api/invites/${encodeURIComponent(activeInvite.token)}/join`
+    : `/api/games/${gameId}/join`;
+  const { response, data } = await post(path, { seatId: controlledSeat, playerId, displayName });
   if (response.ok) { controlActive = true; return; }
   controlActive = false;
   if (data.error === 'seat_occupied') { showMessage('该座位已由其他玩家或 Agent 占用，当前为观战模式', true); return; }
@@ -304,14 +359,13 @@ async function refresh() {
     if (!response.ok) { if (data.error === 'game_not_found') return create(); throw new Error(data.error || 'state_failed'); }
     if (data.competition?.competitionId) competitionId = data.competition.competitionId;
     if (data.competition?.currentGameId && data.competition.currentGameId !== gameId) {
-      gameId = data.competition.currentGameId; controlActive = false; playerJoinAttempt = null; strategyParticipants = {}; strategySnapshotGameId = null; selected.clear(); syncUrl(); refreshing = false; return refresh();
+      gameId = data.competition.currentGameId; controlActive = activeInvite?.inviteType === 'player'; playerJoinAttempt = controlActive ? gameId : null; strategyParticipants = {}; strategySnapshotGameId = null; selected.clear(); syncUrl(); refreshing = false; return refresh();
     }
     state = data; serverClockOffsetMs = Number(data.serverNow || Date.now()) - Date.now(); syncUrl();
     if (!$('strategy-panel').hidden && view === 'global') await loadStrategyDetails(state.phase === 'waiting');
     render();
   } catch (error) { setConnectionError(error); }
   finally { refreshing = false; }
-  await advanceBots();
 }
 
 function setConnectionError(error) { showMessage(`无法连接服务：${error.message}`, true); }
@@ -342,16 +396,6 @@ function renderCountdown() {
   $(`${position}-seat`).classList.add('current-turn');
 }
 
-async function advanceBots() {
-  if (replayMode || !state || state.phase === 'waiting' || state.winner !== null || (controlActive && state.current === controlledSeat) || botBusy) return;
-  if (state.seatControllers && Object.prototype.hasOwnProperty.call(state.seatControllers, state.current)) return;
-  botBusy = true;
-  try { const { response, data } = await post(`/api/games/${gameId}/bot`); if (!response.ok && data.error !== 'game_over') throw new Error(data.error); }
-  catch (error) { setConnectionError(error); }
-  finally { botBusy = false; }
-  await refresh();
-}
-
 function render() {
   const labels = ['A', 'B', 'C'];
   const roles = (id) => state.phase === 'waiting' ? '等待' : state.phase === 'bid' ? '竞叫' : state.landlord === id ? '地主' : '农民';
@@ -359,6 +403,7 @@ function render() {
   const left = (seat + 2) % 3;
   const right = (seat + 1) % 3;
   const bidLabel = state.bidStage === 'rob' ? '抢地主' : '叫地主';
+  $('invite-game').hidden = replayMode || !gameId;
   renderCountdown();
   renderCompetition();
   setPlayer('left', left, labels, roles, controllers);
@@ -368,6 +413,7 @@ function render() {
   renderBottomCards(state.bottom);
   renderTablePlays();
   renderLifecycle();
+  renderInviteMenu();
   renderStrategies();
   renderDecisions();
   renderReviews();
@@ -416,7 +462,9 @@ function renderDecisions() {
 }
 
 function renderStrategies() {
-  const available = replayMode || view === 'global';
+  const replayStrategies = Object.values(replay?.participants || {}).some((participant) => participant?.strategy);
+  const liveStrategies = Object.keys(state?.strategyAssignments || {}).length > 0;
+  const available = (replayMode && replayStrategies) || (view === 'global' && liveStrategies);
   const button = $('strategy-record');
   button.hidden = !available;
   if (!available) setStrategyPanel(false);
@@ -501,7 +549,7 @@ function renderStrategyDocument() {
   if (!strategy) {
     const empty = document.createElement('p');
     empty.className = 'decision-empty';
-    empty.textContent = participant?.type === 'player' ? '人工玩家未绑定 Agent 策略' : participant?.type === 'agent' ? '本局策略快照缺失' : '该席位尚未接入';
+    empty.textContent = participant?.type === 'player' ? '人工玩家未绑定 Agent 策略' : participant?.type === 'agent' ? '本地 Agent 未向服务端公开策略' : '该席位尚未接入';
     content.appendChild(empty);
     return;
   }
@@ -806,7 +854,7 @@ function controllerLabel(id) {
   if (controller?.type === 'player') return '玩家';
   if (state.phase === 'waiting') return '待接入';
   if (replayMode) return 'Bot';
-  return controlActive && id === controlledSeat ? '玩家' : 'Bot';
+  return controlActive && id === controlledSeat ? '玩家' : '未接入';
 }
 function setPlayer(position, id, labels, roles, controllers) { renderAvatar($(`${position}-avatar`), id, labels[id]); $(`${position}-name`).textContent = `${roles(id)} ${labels[id]} · ${controllers(id)}`; $(`${position}-name`).title = state.seatControllers?.[id]?.id || ''; $(`${position}-count`).textContent = state.phase === 'waiting' ? readyLabel(id) : `${state.hands[id].count} 张`; renderOpponentHand(position, id); }
 function renderAvatar(element, id, label) {
@@ -941,6 +989,7 @@ $('new-game').onclick = () => { if (replayMode) location.href = replayReturn?.st
 $('rematch-game').onclick = createReplayRematch;
 $('start-game').onclick = () => state?.phase === 'over' ? create(selectedRounds) : start();
 $('agent-connect').onclick = () => setAgentTypeMenu($('agent-type-menu').hidden);
+$('invite-game').onclick = () => setInviteMenu($('invite-menu').hidden);
 $('close-agent-panel').onclick = () => setAgentPanel(false);
 $('game-record').onclick = openGameRecord;
 $('strategy-record').onclick = () => setStrategyPanel($('strategy-panel').hidden);
@@ -959,18 +1008,32 @@ document.querySelectorAll('.perspectives button').forEach((button) => button.onc
 document.querySelectorAll('[data-rounds]').forEach((button) => button.onclick = () => { const rounds = Number(button.dataset.rounds); if (rounds !== selectedRounds) create(rounds); });
 document.querySelectorAll('[data-strategy-seat]').forEach((button) => button.onclick = () => { strategySeat = normalizeSeat(button.dataset.strategySeat); renderStrategyDocument(); });
 document.querySelectorAll('[data-agent-type]').forEach((button) => button.onclick = () => setAgentPanel(true, button.dataset.agentType));
+document.querySelectorAll('[data-invite-type][data-invite-seat]').forEach((button) => button.onclick = () => createInvite(button.dataset.inviteType, Number(button.dataset.inviteSeat)));
 $('replay-prev').onclick = () => stepReplay(-1);
 $('replay-toggle').onclick = toggleReplay;
 $('replay-next').onclick = () => stepReplay(1);
 $('replay-progress').oninput = (event) => showReplayFrame(event.target.value);
 document.addEventListener('click', (event) => {
   if (!$('agent-type-menu').hidden && !event.target.closest('#agent-type-menu') && !event.target.closest('#agent-connect')) setAgentTypeMenu(false);
+  if (!$('invite-menu').hidden && !event.target.closest('#invite-menu') && !event.target.closest('#invite-game')) setInviteMenu(false);
 });
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !$('agent-type-menu').hidden) { setAgentTypeMenu(false); $('agent-connect').focus(); }
+  if (event.key === 'Escape' && !$('invite-menu').hidden) { setInviteMenu(false); $('invite-game').focus(); }
 });
-window.addEventListener('resize', () => setAgentTypeMenu(false));
+window.addEventListener('resize', () => { setAgentTypeMenu(false); setInviteMenu(false); });
 
-if (replayMode) loadReplay(); else if (gameId) refresh(); else create();
+async function initialize() {
+  try {
+    if (inviteToken) await resolveInvite();
+    if (replayMode) await loadReplay();
+    else if (gameId) await refresh();
+    else await create();
+  } catch (error) {
+    setConnectionError(error);
+  }
+}
+
+initialize();
 setInterval(() => { if (!replayMode) refresh(); }, 1200);
 setInterval(renderCountdown, 250);
