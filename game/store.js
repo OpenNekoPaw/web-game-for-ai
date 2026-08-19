@@ -1,11 +1,14 @@
 import { applyAction, chooseSimpleAction, createDeck, createGame, publicState, startGame } from './ddz.js';
+import { randomBytes } from 'node:crypto';
 import { appendReplayFrame, createReplay, readReplay, updateReplayParticipants } from './replay-store.js';
 import { getStrategy, listStrategies } from './strategy-store.js';
 
 const games = new Map();
 const competitions = new Map();
+const invites = new Map();
 const DEFAULT_TURN_TIMEOUT_MS = 60_000;
 const MAX_TURN_TIMEOUT_MS = 60_000;
+const INVITE_TTL_MS = 30 * 60_000;
 const configuredTurnTimeoutMs = normalizeTurnTimeout(process.env.TURN_TIMEOUT_MS);
 let lastGameTimestamp = 0;
 let lastCompetitionTimestamp = 0;
@@ -19,6 +22,7 @@ export function createMatch(options = {}) {
   game.decisions = [];
   game.actionHistory = [];
   game.agentStrategies = new Map();
+  game.localStrategySeats = new Set();
   game.reviews = new Map();
   game.actionStats = [createActionStats(), createActionStats(), createActionStats()];
   game.competitionId = options.competitionId || null;
@@ -110,7 +114,7 @@ export function getMatch(gameId) {
   return games.get(gameId) || null;
 }
 
-export function joinMatch(gameId, seatId, agentId, strategyId, displayName) {
+export function joinMatch(gameId, seatId, agentId, strategyId, displayName, options = {}) {
   const game = requireMatch(gameId);
   validateSeat(seatId);
   if (game.players.has(seatId)) throw new Error('seat_occupied');
@@ -121,10 +125,62 @@ export function joinMatch(gameId, seatId, agentId, strategyId, displayName) {
     : normalizeDisplayName(displayName, agentId);
   game.agents.set(seatId, agentId);
   game.displayNames.set(seatId, resolvedDisplayName);
-  if (!game.agentStrategies.has(seatId)) game.agentStrategies.set(seatId, getStrategy(strategyId));
+  if (options.strategyMode === 'local') {
+    if (game.agentStrategies.has(seatId)) throw new Error('strategy_mismatch');
+    game.localStrategySeats.add(seatId);
+  } else if (game.localStrategySeats.has(seatId)) {
+    if (strategyId) throw new Error('strategy_mismatch');
+  } else if (!game.agentStrategies.has(seatId)) game.agentStrategies.set(seatId, getStrategy(strategyId));
   else if (strategyId && game.agentStrategies.get(seatId).id !== strategyId) throw new Error('strategy_mismatch');
   updateReplayParticipants(gameId, participants(game));
   return observeMatch(gameId, seatId);
+}
+
+export function createMatchInvite(gameId, inviteType, seatId = 0) {
+  const game = requireMatch(gameId);
+  if (!['player', 'agent', 'spectator'].includes(inviteType)) throw new Error('invalid_invite_type');
+  const normalizedSeat = Number(seatId);
+  validateSeat(normalizedSeat);
+  if (inviteType !== 'spectator') {
+    if (game.phase !== 'waiting') throw new Error('game_already_started');
+    if (occupiedSeats(game).includes(normalizedSeat)) throw new Error('seat_occupied');
+  }
+  const now = Date.now();
+  pruneExpiredInvites(now);
+  const invite = {
+    token: randomBytes(24).toString('base64url'),
+    inviteType,
+    gameId,
+    seatId: normalizedSeat,
+    competitionId: game.competitionId,
+    createdAt: now,
+    expiresAt: now + INVITE_TTL_MS,
+    usedBy: null
+  };
+  invites.set(invite.token, invite);
+  return publicInvite(invite);
+}
+
+export function resolveMatchInvite(token) {
+  return publicInvite(requireInvite(token));
+}
+
+export function joinAgentInvite(token, agentId, displayName) {
+  const invite = requireInvite(token, 'agent');
+  const identity = normalizeInviteIdentity(agentId, 'anonymous');
+  assertInviteIdentity(invite, identity);
+  const result = joinMatch(invite.gameId, invite.seatId, identity, undefined, displayName, { strategyMode: 'local' });
+  invite.usedBy ||= identity;
+  return { invite: publicInvite(invite), ...result };
+}
+
+export function joinPlayerInvite(token, playerId, displayName) {
+  const invite = requireInvite(token, 'player');
+  const identity = normalizeInviteIdentity(playerId, `h5-player-${invite.seatId}`);
+  assertInviteIdentity(invite, identity);
+  const result = joinPlayerMatch(invite.gameId, invite.seatId, identity, displayName);
+  invite.usedBy ||= identity;
+  return { invite: publicInvite(invite), ...result };
 }
 
 export function joinPlayerMatch(gameId, seatId, playerId, displayName) {
@@ -279,23 +335,6 @@ export function submitCompetitionReview(competitionId, seatId, review) {
   }
   recordFrame(currentGame, { type: 'competition_review', seatId, review: record });
   return observeCompetition(competitionId, seatId);
-}
-
-export function runBot(gameId) {
-  const game = requireMatch(gameId);
-  const timeoutResult = advanceTimedOutTurn(game);
-  if (timeoutResult) return timeoutResult;
-  if (game.winner !== null) throw new Error('game_over');
-  if (game.phase === 'waiting') throw new Error('game_not_started');
-  if (game.agents.has(game.current) || game.players.has(game.current)) throw new Error('occupied_turn');
-  const seatId = game.current;
-  const action = chooseSimpleAction(game, seatId);
-  applyAction(game, seatId, action);
-  settleGame(game);
-  game.actionHistory.push({ seq: game.seq, at: Date.now(), seatId, source: 'bot', phase: game.phase, action: structuredClone(action) });
-  resetTurnClock(game);
-  recordFrame(game, { type: 'action', source: 'bot', seatId, action });
-  return { seatId, seq: game.seq, timedOut: false };
 }
 
 export function getReplay(gameId) {
@@ -546,6 +585,7 @@ function advanceCompetitionAfterRound(game) {
   nextGame.players = new Map(game.players);
   nextGame.displayNames = new Map(game.displayNames);
   nextGame.agentStrategies = new Map([...game.agentStrategies].map(([seatId, strategy]) => [seatId, structuredClone(strategy)]));
+  nextGame.localStrategySeats = new Set(game.localStrategySeats);
   updateReplayParticipants(nextGame.gameId, participants(nextGame));
   competition.currentRound = nextRound;
   competition.currentGameId = nextGame.gameId;
@@ -721,6 +761,52 @@ function requireMatch(gameId) {
   const game = games.get(gameId);
   if (!game) throw new Error('game_not_found');
   return game;
+}
+
+function requireInvite(token, expectedType = null) {
+  if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{32}$/.test(token)) throw new Error('invite_not_found');
+  const invite = invites.get(token);
+  if (!invite) throw new Error('invite_not_found');
+  if (Date.now() >= invite.expiresAt) {
+    invites.delete(token);
+    throw new Error('invite_expired');
+  }
+  if (expectedType && invite.inviteType !== expectedType) throw new Error('invite_type_mismatch');
+  requireMatch(invite.gameId);
+  return invite;
+}
+
+function pruneExpiredInvites(now) {
+  for (const [token, invite] of invites) {
+    if (now >= invite.expiresAt) invites.delete(token);
+  }
+}
+
+function publicInvite(invite) {
+  const game = requireMatch(invite.gameId);
+  const occupied = invite.inviteType === 'spectator' ? false : occupiedSeats(game).includes(invite.seatId);
+  return {
+    protocol: 'agent-game.invite.v1',
+    token: invite.token,
+    inviteType: invite.inviteType,
+    gameId: invite.gameId,
+    seatId: invite.seatId,
+    competitionId: invite.competitionId,
+    view: invite.inviteType === 'spectator' ? 'global' : 'player',
+    expiresAt: invite.expiresAt,
+    singleUse: invite.inviteType !== 'spectator',
+    available: invite.inviteType === 'spectator' || (!occupied && !invite.usedBy)
+  };
+}
+
+function assertInviteIdentity(invite, identity) {
+  if (invite.usedBy && invite.usedBy !== identity) throw new Error('invite_used');
+}
+
+function normalizeInviteIdentity(value, fallback) {
+  const identity = String(value || fallback).trim();
+  if (!identity || identity.length > 120) throw new Error('invalid_identity');
+  return identity;
 }
 
 function requireCompetition(competitionId) {
