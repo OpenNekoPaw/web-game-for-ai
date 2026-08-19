@@ -1,6 +1,6 @@
 # Dou Dizhu Agent Protocol
 
-The local MCP server adapts game tools to the application's HTTP `agent-game.v1` protocol. The application is the only source of truth.
+The game service exposes these tools through its remote MCP endpoint. The application is the only source of truth.
 
 ## Tools
 
@@ -9,6 +9,7 @@ The local MCP server adapts game tools to the application's HTTP `agent-game.v1`
 | `list_strategies` | List editable Markdown strategies | None |
 | `create_game` | Create a match | Turn timeout is fixed at 60000 ms (1 minute) |
 | `create_rematch` | Create an independent match from a completed deal | `sourceGameId` |
+| `join_invite` | Consume an Agent invitation and join its game and seat | `inviteToken` or `inviteUrl`, `agentId`; optional `displayName` |
 | `join_game` | Claim or reconnect to a seat and lock a strategy snapshot | `gameId`, `seatId`, `agentId`; optional `displayName`, `strategyId` |
 | `observe_game` | Read one seat's private observation | `gameId`, `seatId` |
 | `start_game` | Mark the controlled seat ready; the third ready seat starts dealing | `gameId`, controlled `seatId` |
@@ -36,7 +37,7 @@ The local MCP server adapts game tools to the application's HTTP `agent-game.v1`
 - `lastPlay`, `tablePlays`, and `bottom`: public card objects currently visible on the table. `tablePlays` retains the current high play while later seats pass and is replaced only by the next accepted play. Each card binds the stable action `id` to `rank`, `suit`, visible `label`, and numeric `strength`.
 - `passCount` and `tablePasses`: consecutive passes after `lastPlay` and their display state. With `lastPlay` present, `passCount=0` means a pass leaves one more seat able to respond; `passCount=1` means the next pass resets the trick and the next seat, which is the current `lastPlay.seatId`, receives the lead.
 - `turnDeadlineAt` and `serverNow`: absolute timestamps for remaining turn time.
-- `strategy`: the selected Markdown strategy snapshot for this seat.
+- The service does not return an Agent-owned local strategy. Keep the Markdown strategy in the Agent runtime. Server-catalog strategy metadata is returned only when explicitly selected.
 - `reviewContext`: available after `phase=over`; contains result, final counts, action statistics, this seat's decisions, and the public action timeline.
 - `roleContext`: dynamic role and position context. `previousSeat` and `nextSeat` describe turn order relative to this Agent. `farmerPosition` is `landlord_upstream` when this farmer acts immediately before the landlord and `landlord_downstream` when it acts immediately after the landlord. It also contains `landlordSeat`, `teammateSeat`, `landlordUpstreamSeat`, and `landlordDownstreamSeat`. Role-dependent values are `null` until bidding resolves. `upstreamSeat` and `downstreamSeat` are compatibility aliases for `previousSeat` and `nextSeat`; never use those aliases to select a role strategy.
 
@@ -65,7 +66,7 @@ An Agent may attach a public decision summary. It is stored in the replay and vi
 - `intent` is optional, maximum 80 characters.
 - `confidence` is optional and ranges from 0 to 1.
 - The server calculates `durationMs`; do not submit it.
-- The server stores each accepted decision with its `gameId` and the seat's strategy `id`, `updatedAt`, and content `hash`. These server-owned fields bind the decision to the immutable strategy snapshot in that replay; do not submit them. Older records may contain `version`, but new strategies do not use numeric versions.
+- Server-catalog strategies add their `id`, `updatedAt`, and content `hash` to accepted decisions. Local strategies are not uploaded, so their metadata is intentionally absent from the server replay.
 - Never include hidden chain-of-thought, full prompts, private tool traces, or unsupported hidden-card claims.
 
 ## Card IDs

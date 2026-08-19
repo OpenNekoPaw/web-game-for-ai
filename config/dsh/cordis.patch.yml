@@ -1,22 +1,16 @@
-# DeepSeek Harness (DSH) MCP patch for the AI H5 Game.
+# DeepSeek Harness (DSH) MCP patch for the AI H5 Game server MCP.
 #
 # Usage (from this repository root):
 #   npm start
 #   pnpm dsh web --patch ./config/dsh/cordis.patch.yml
 #
-# If DSH is started from a different directory, set AI_H5_GAME_ROOT first:
-#   AI_H5_GAME_ROOT=/absolute/path/to/ai-h5-game pnpm dsh web --patch ...
+# The MCP client connects to the running game server; no repository-local command is spawned.
 - insert:
-    - id: ddz-mcp
+    - id: ai-h5-game
       name: '@deepseek-ai/dsh-mcp-client'
       config:
-        serverName: ddz
-        transport: stdio
-        command: node
-        args:
-          - !!js (process.env.AI_H5_GAME_ROOT ?? process.cwd()) + '/mcp-server.js'
-        cwd: !!js process.env.AI_H5_GAME_ROOT ?? process.cwd()
-        env:
-          DDZ_SERVER_URL: http://127.0.0.1:3000
+        serverName: ai-h5-game
+        transport: streamable-http
+        url: http://127.0.0.1:3000/mcp
         toolCallTimeoutMs: 60000
         failOnStartupError: false

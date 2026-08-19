@@ -1,9 +1,7 @@
 {
   "mcpServers": {
     "ai-h5-game": {
-      "command": "node",
-      "args": ["./mcp-server.js"],
-      "cwd": "."
+      "url": "http://127.0.0.1:3000/mcp"
     }
   }
 }

@@ -1,6 +1,2 @@
-[mcp_servers.ddz]
-command = "node"
-args = ["/Users/feng/Documents/ChatGPT/ai-h5-game/mcp-server.js"]
-
-[mcp_servers.ddz.env]
-DDZ_SERVER_URL = "http://127.0.0.1:3000"
+[mcp_servers.ai_h5_game]
+url = "http://127.0.0.1:3000/mcp"

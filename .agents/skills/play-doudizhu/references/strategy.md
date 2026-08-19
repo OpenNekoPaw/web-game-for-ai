@@ -6,7 +6,7 @@ Gameplay decisions belong to the model and the selected editable Markdown strate
 
 1. The game service is authoritative for current state, information visibility, turn ownership, legality, timeout, settlement, and replay.
 2. [rules.md](rules.md) defines the supported MVP combinations and comparison rules.
-3. The `strategy.markdown` snapshot returned by `join_game` guides and constrains bidding, hand organization, card-strength preservation, role-specific play, farmer cooperation, endgame behavior, and review criteria.
+3. The Agent-owned Markdown strategy guides and constrains bidding, hand organization, card-strength preservation, role-specific play, farmer cooperation, endgame behavior, and review criteria. It never leaves the Agent runtime. A server-catalog strategy is optional and must be explicitly selected.
 
 Rules override a strategy when they conflict. A strategy chooses among legal actions but cannot create a legal action or reveal hidden information.
 

@@ -5,30 +5,30 @@ description: Play one seat in the local Agent Arena Dou Dizhu game through the b
 
 # Play Dou Dizhu
 
-Control exactly one seat while the independently running H5 game service remains the authoritative dealer and referee.
+Control exactly one seat through the game service's remote MCP endpoint. The service remains the authoritative dealer and referee.
 
 ## Responsibility Boundary
 
 - Treat the game service as infrastructure only: it deals cards, exposes seat-scoped state, validates actions, advances turns, enforces the fixed deadline, settles scores, and records the match.
 - Do all gameplay reasoning in the model. The service does not identify preferred combinations, rank candidate moves, protect hand structure, coordinate farmers, or recommend an action.
-- Treat the selected `strategy.markdown` snapshot as the gameplay policy for the match. The Skill explains the protocol and state fields; it does not replace or silently override that strategy.
+- Treat the Agent's own local Markdown strategy as the gameplay policy. The game server MCP does not receive or display that local file. If explicitly using a server-catalog strategy, use the strategy returned by `join_game`.
 
 ## Prerequisite
 
-- Require the local game service at `DDZ_SERVER_URL`, defaulting to `http://127.0.0.1:3000`.
+- Require the game service MCP endpoint at `http://127.0.0.1:3000/mcp` unless the user provides another URL.
 - If a tool reports `game_service_unavailable`, tell the user to start the application with `npm start` from its repository. Do not attempt to embed or replace the game service.
 
 ## Tool Names
 
-- The MCP tools are `list_strategies`, `create_game`, `create_rematch`, `join_game`, `observe_game`, `start_game`, `submit_action`, `submit_review`, `create_competition`, `observe_competition`, and `submit_competition_review`.
+- The MCP tools are `list_strategies`, `create_game`, `create_rematch`, `join_invite`, `join_game`, `observe_game`, `start_game`, `submit_action`, `submit_review`, `create_competition`, `observe_competition`, and `submit_competition_review`.
 - Some agent hosts namespace MCP tools. If the environment exposes names like `mcp__ddz__create_game` or `mcp__ai-h5-game__create_game`, use the namespaced form exactly as shown by the host; otherwise use the raw names below.
 
 ## Start or Join
 
-1. Call `create_game` only when the user wants a new random game. When the user wants to compare models or strategies on a completed deal, call `create_rematch` with its `sourceGameId`. Preserve the returned new `gameId`; never reuse the source game for actions.
-2. Call `list_strategies` and select the requested Markdown strategy, or use its `defaultStrategyId`.
+1. When the user supplies an Agent invitation URL, call `join_invite` with that exact URL, a stable `agentId`, and a concise `displayName`; do not create another game. Otherwise call `create_game` only for a new random game, or `create_rematch` for a completed deal.
+2. Keep the Agent's selected local Markdown strategy available to the model. Call `list_strategies` only when explicitly comparing a server-catalog strategy.
 3. Choose an unclaimed `seatId` from `0`, `1`, or `2`, unless the user specifies one.
-4. Call `join_game` once with a stable `agentId`, a concise public `displayName` identifying this Agent at the table, and the chosen `strategyId`. Read and follow the returned `strategy.markdown` for this match.
+4. For a direct join, call `join_game` once with a stable `agentId` and public `displayName`. Only pass `strategyMode=server` and `strategyId` when explicitly comparing a server-catalog strategy. For an invitation, use the `gameId` and `seatId` returned by `join_invite`.
 5. Joining claims the seat but does not make it ready. Call `start_game` once with the controlled `seatId` to mark only that seat ready.
 6. While `phase=waiting`, take no bid or play action. The third ready seat starts dealing automatically; continue observing until the phase changes.
 7. Give the user the H5 URL in the form `http://localhost:3000/?game=<gameId>&seat=<seatId>` when useful.
@@ -47,7 +47,7 @@ Control exactly one seat while the independently running H5 game service remains
 10. Submit with the observation's exact `gameId`, `you` as `seatId`, and latest `seq`. Include a concise public decision summary when possible; state the remaining-play conclusion when it materially determines the action, without chain-of-thought, prompts, or private tool traces.
 11. On `stale_state`, observe again and make a new decision from the new state instead of resubmitting blindly.
 12. Continue only as far as requested. For autonomous play, repeat until `phase=over`, observing immediately before every action.
-13. At `phase=over`, use `reviewContext` to submit one evidence-based review. Propose edits to the selected strategy; never modify a strategy during its active match.
+13. At `phase=over`, use `reviewContext` to submit one evidence-based review. Propose edits to the local or server strategy; never modify a strategy during its active match.
 
 For a multi-round competition, call `create_competition` with 3, 5, or 7 rounds, then use the returned `currentGameId` with the normal join/start/action loop. Submit one `submit_review` after each round; wait for the next `currentGameId` and prepare all seats again. After the final round, use `observe_competition` and submit one `submit_competition_review` with only problems repeated across rounds and improvements supported by the recorded outcomes.
 

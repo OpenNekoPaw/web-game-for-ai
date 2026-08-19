@@ -1,22 +1,37 @@
 # Agent Game Protocol v1
 
-MVP 使用 HTTP JSON。服务端是唯一裁判；Agent 只能观察自己的私有状态并提交动作。
+MVP 使用服务端远程 MCP（JSON-RPC over HTTP）。服务端是唯一裁判；Agent MCP Client 只能观察自己的私有状态并提交动作。旧的 `/agent/v1` HTTP JSON 路径保留为兼容接口，不作为推荐接入方式。
 
 ## 基本流程
 
-1. `POST /agent/v1/games` 创建牌局；每个回合固定 60000 毫秒（1 分钟），客户端传入的其他超时值会按 1 分钟处理。
-2. `GET /agent/v1/strategies` 查看可选 Markdown 策略。
-3. `POST /agent/v1/games/:gameId/join` 占用座位，可携带 `strategyId` 和公开的 `displayName`；此时尚未准备。
-4. `POST /agent/v1/games/:gameId/start` 携带本席 `seatId`，表示该角色已经准备开始。
-5. `GET /agent/v1/games/:gameId/observe?seatId=0` 获取观察；第三席准备后服务端自动发牌。
-6. 当 `isYourTurn=true` 时，调用 `POST /agent/v1/games/:gameId/actions`。
-7. 重复观察，直到 `phase=over`；读取 `reviewContext` 后调用 `POST /agent/v1/games/:gameId/review` 提交复盘。
+1. Agent MCP Client 连接 `POST /mcp`，完成 `initialize` 和 `tools/list`。
+2. 使用 `create_game` 或 `create_competition` 创建牌局；每个回合固定 60000 毫秒（1 分钟）。
+3. 使用 `join_invite`（邀请 token 或完整邀请 URL）或 `join_game` 占座；本地策略由 Agent 自己读取，不上传服务端。
+4. 使用 `start_game` 携带本席 `seatId` 准备；三席准备后服务端自动发牌。
+5. 使用 `observe_game` 获取观察；当 `isYourTurn=true` 时使用 `submit_action`。
+6. 重复观察，直到 `phase=over`；读取 `reviewContext` 后使用 `submit_review` 提交复盘。
+
+MCP 配置示例：
+
+```json
+{"mcpServers":{"ai-h5-game":{"url":"http://127.0.0.1:3000/mcp"}}}
+```
 
 ## 同牌复战
 
 使用 `POST /api/replays/:sourceGameId/rematch` 或 MCP `create_rematch` 从一局已完成对局创建独立复战局。服务只复制首次发牌的三家手牌、底牌和首叫席位；不会复制控制者、准备状态、策略、决策、比分或比赛关系。返回的新 `gameId` 按普通单局流程重新 `join/start/observe/actions`，因此可以为每席更换 Agent、模型和 `strategyId`。观察中的 `sourceGameId` 指向共同基线；普通随机局为 `null`。
 
 同牌只固定游戏初始条件，不保证模型输出确定。三家都不叫后仍按正常规则重新洗牌，因此比较实验应同时记录是否在首次发牌阶段完成叫抢。
+
+## 邀请链接
+
+`POST /api/games/:gameId/invites` 创建邀请，`inviteType` 为 `player`、`agent` 或 `spectator`，玩家和 Agent 还需指定空闲的 `seatId`。座位邀请 30 分钟内有效并只能由同一身份占用；同一身份可以重试。观战邀请可重复打开并进入全局视角。
+
+- 玩家链接：`/?invite=<token>`，浏览器打开后使用 `POST /api/invites/:token/join` 占座。
+- Agent 链接：`/agent/v1/invites/:token`，服务端 MCP 使用 `join_invite` 解析并占座。
+- 观战链接：`/?invite=<token>`，不占座、不控制玩家。
+
+Token 只映射邀请类型、牌局、座位和有效期，不包含模型配置、提示词或本地策略。Token 保存在游戏服务进程内，服务重启后失效。加入座位不等于准备，玩家或 Agent 仍需调用对应的 `start` 接口。
 
 ## 多轮比赛
 
@@ -34,9 +49,9 @@ MVP 使用 HTTP JSON。服务端是唯一裁判；Agent 只能观察自己的私
 
 - 座位：`0`、`1`、`2`，界面显示为 A、B、C；出牌轮转为 `seat + 1`。
 - 以当前视角为底部时，左侧是 `seat + 2`，右侧是 `seat + 1`（例如 A 视角左 C、右 B）。
-- H5 页面中的 `seat` 只表示观察视角，`control` 表示本地控制座位。默认不生成 `control`、不占用座位；只有 URL 显式携带 `control=<seat>` 时才尝试占座。可选 `name=<displayName>` 设置普通玩家的公开名称。切换视角不会改变控制座位或触发 Bot。
+- H5 页面中的 `seat` 只表示观察视角，`control` 是兼容的本地控制参数；邀请玩家优先使用 `invite` Token 占座。可选 `name=<displayName>` 设置普通玩家的公开名称。切换视角不会改变控制座位。
 - H5 普通玩家通过 `POST /api/games/:gameId/join` 占座，Agent 通过 `/agent/v1/.../join` 占座；两者可以任意组合，但不能占用同一座位。
-- 全局观战界面通过 `GET /api/games/:gameId/strategies?view=global` 按需读取本局完整策略内容；普通状态轮询只返回策略摘要，避免重复传输 Markdown。
+- 只有使用服务端目录策略的席位会在全局观战界面展示策略；本地 Agent 策略不上传，也不会出现在该接口或回放中。
 - `seatControllers` 返回每个已占座位置的 `{type,id,displayName}`，其中 `type` 为 `player` 或 `agent`。`id` 是重连与占座使用的稳定标识，`displayName` 是牌桌、策略面板和历史对局显示的公开名称（最多 40 字符）；`readySeats` 只包含已明确确认开始的座位。
 - 普通牌：`rank:suit`，例如 `3:0`。
 - rank：`3..15`，其中 `11=J`、`12=Q`、`13=K`、`14=A`、`15=2`。
@@ -124,7 +139,7 @@ Agent 可以附加可公开的结构化决策摘要；该字段可选，不影�
 ```
 
 - `summary` 必填，最多 160 字符；`intent` 可选，最多 80 字符；`confidence` 可选，范围为 0–1。
-- `durationMs` 由服务端按回合开始时间计算，Agent 不提交。服务端还会在保存时附加当前 `gameId` 以及本席策略的 `id/updatedAt/hash` 快照，使决策、玩家策略和回放始终关联到同一局。
+- `durationMs` 由服务端按回合开始时间计算，Agent 不提交。服务端目录策略会附加 `id/updatedAt/hash`；本地策略不上传，因此决策记录不会包含其正文或标识。
 - 只提交可公开的结论摘要，不要发送模型思维链、完整提示词、私有工具日志或基于隐藏牌的推测。
 - 摘要写入对局记录，仅在 H5 全局视角和回放中展示。
 
@@ -134,8 +149,8 @@ Agent 可以附加可公开的结构化决策摘要；该字段可选，不影�
 
 - 服务只返回原始牌局信息并校验最终动作，不提供牌型分析、候选动作排序、策略推荐或农民协同字段。模型必须根据私有手牌、公开状态、规则和本局策略自行决策。
 - 当前无鉴权，适合本机验证，不应直接暴露到公网。
-- HTTP 采用轮询观察；后续可以增加 SSE/WebSocket，但动作与观察字段保持兼容。
-- 回合固定为 60 秒，用于限制模型过度复杂或卡死的思考流程，不触发独立的快速决策策略。超时后由服务端自动处理：叫地主阶段自动“不叫”、抢地主阶段自动“不抢”；跟牌阶段自动“不要”；必须领出时使用简单 Bot 自动出牌。
+- MCP 通过 HTTP 请求承载 JSON-RPC；旧 HTTP Agent 路径保留兼容，动作与观察字段保持兼容。
+- 服务端不部署 Agent，也不在正常流程代替空座出牌。回合固定为 60 秒；超时属于裁判兜底：叫地主阶段自动“不叫”、抢地主阶段自动“不抢”、跟牌阶段自动“不要”；必须领出时选择一个最小合法动作，避免牌局永久阻塞。
 - 一个进程内保存牌局，服务重启后牌局会消失。
 - 比赛同样是进程内内存状态；每轮有独立回放和结算，综合总结只在最后一轮完成后提交。
-- 策略存放于 `strategies/ddz/*.md`，默认方案为 `default.md`。每个文件必须是一套完整、自包含、可整体替换的方案；单局只锁定一个文件，不继承、拼接或混用其他策略。快照使用稳定的 `strategyId`、文件 `updatedAt` 和内容 `hash` 标识，不维护数字版本号；后续修改文件不会改变已开始对局；复盘只提出修改建议，不自动编辑策略。
+- 本地策略由 Agent 自己读取并按对局锁定，只提供给本地模型。`strategies/ddz/*.md` 是可选的服务端目录策略；两种方式都要求一份文件是一套完整方案。复盘只提出建议，不自动编辑策略。

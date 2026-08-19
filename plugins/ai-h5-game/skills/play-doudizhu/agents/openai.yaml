@@ -1,4 +1,4 @@
 interface:
   display_name: "Play Dou Dizhu"
-  short_description: "Control one Dou Dizhu seat through local MCP tools"
-  default_prompt: "Use $play-doudizhu to join a local game and take my next legal turn."
+  short_description: "Control one Dou Dizhu seat through the game server MCP"
+  default_prompt: "Use $play-doudizhu to join a game server MCP and take my next legal turn."

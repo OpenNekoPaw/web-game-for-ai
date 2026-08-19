@@ -33,7 +33,7 @@ tar -xzf agent-game-ddz-linux-<arch>.tar.gz
 PORT=3000 ./ddz-server
 ```
 
-运行二进制不需要安装 Node.js 或 Bun。`share/` 必须和 `ddz-server` 保持在同一目录，对局记录默认写入同目录的 `records/`。
+运行二进制不需要安装 Node.js 或 Bun。`ddz-server` 同时提供 H5 页面和远程 MCP Server；Agent 的 MCP Client 直接连接游戏服务端。`share/` 必须和 `ddz-server` 保持在同一目录，对局记录默认写入同目录的 `records/`。
 
 本地安装 Bun 后，也可以生成当前平台的发布目录：
 
@@ -47,6 +47,7 @@ CI 会在 Linux AMD64 和 ARM64 上运行测试、构建二进制、启动验证
 ## 页面操作
 
 - 等待三家加入后，各席分别点击“开始对局”，三家准备完成后自动发牌。
+- 顶部“邀请”可按空座复制玩家或 Agent 邀请，也可复制可重复使用的全局观战链接。
 - 顶部 `A / B / C` 切换观察视角；`全局牌面`显示三家手牌，便于观战和复盘。
 - 只有 URL 显式带 `control=<seat>` 时，页面才会控制对应席位；单独切换 `seat` 不会占用座位。
 - 牌桌显示底牌、叫地主/抢地主过程、当前出牌和“不要”提示。
@@ -63,15 +64,9 @@ http://localhost:3000/?replay=<gameId>&view=global
 
 ## Agent 接入
 
-Agent 通过 HTTP 或 MCP 接入，普通玩家和 Agent 可以混合对局。每个席位需要先加入，再确认开始；每回合有 60 秒处理时间。
-页面左上角的 `Agent 接入` 可选择 Codex、通用 MCP 或 HTTP，并复制对应配置及当前 Skill。
+Agent 通过游戏服务端的远程 MCP 接入，普通玩家和 Agent 可以混合对局。每个席位需要先加入，再确认开始；每回合有 60 秒处理时间。页面左上角的 `Agent 接入` 可复制 MCP URL 和当前 Skill。收到牌桌生成的 Agent 邀请链接后，Agent MCP Client 使用 `join_invite` 加入指定服务器和座位。
 
-启动 MCP Server：
-
-```bash
-npm start
-npm run mcp
-```
+MCP 地址：`http://127.0.0.1:3000/mcp`。服务端只提供牌局状态、规则校验和动作工具；模型、Agent 配置和本地策略由 Agent 自己管理，不上传游戏服务。
 
 Codex 插件位于 `plugins/ai-h5-game/`，本地安装：
 
@@ -84,7 +79,7 @@ codex plugin add ai-h5-game@ai-h5-game-local
 
 ## 策略
 
-默认策略是 [strategies/ddz/default.md](strategies/ddz/default.md)。一份 Markdown 即为一套完整方案，包含叫抢、地主、农民、协作、残局和复盘规则。替换或新增策略文件后，通过 `strategyId` 选择；对局会保存当时使用的策略内容、更新时间和 hash。
+默认策略是 [strategies/ddz/default.md](strategies/ddz/default.md)。Agent 可以在本地读取并替换完整 Markdown 策略；服务端 MCP 不读取、不展示本地策略。需要比较服务端目录方案时，Agent 可在 `join_game` 中显式使用 `strategyMode=server` 和 `strategyId`。
 
 ## 当前效果
 
