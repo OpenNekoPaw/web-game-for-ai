@@ -1,40 +1,24 @@
-# Dou Dizhu Match Objective and Strategy Principles
+# Strategy Contract
 
-Use this stable guidance after confirming legality with `rules.md`. User-editable match strategies live in the application repository under `strategies/ddz/*.md` and are returned as `strategy.markdown` after joining a seat. Follow the selected match strategy for preferences while always respecting these rules and objectives. The goal is to maximize the controlled side's chance of winning, not simply to play cards quickly.
+Gameplay decisions belong to the model and the selected editable Markdown strategy, not to the game service or this Skill.
 
-## Objective and Roles
+## Sources of authority
 
-- The `landlord` field is the landlord seat after bidding completes.
-- If `you === landlord`, play as the landlord against both other seats.
-- Otherwise play as a farmer; the other non-landlord seat is your teammate.
-- The landlord side wins only when the landlord empties its hand first.
-- The farmer side wins when either farmer empties its hand first. A farmer may spend cards or yield control to help the teammate finish.
-- During bidding, `landlord` can still be null. Use `landlordCandidate` and `bidStage` only to understand the current auction; the final role is known when `phase=play`.
+1. The game service is authoritative for current state, information visibility, turn ownership, legality, timeout, settlement, and replay.
+2. [rules.md](rules.md) defines the supported MVP combinations and comparison rules.
+3. The `strategy.markdown` snapshot returned by `join_game` guides and constrains bidding, hand organization, card-strength preservation, role-specific play, farmer cooperation, endgame behavior, and review criteria.
 
-## Information Boundary
+Rules override a strategy when they conflict. A strategy chooses among legal actions but cannot create a legal action or reveal hidden information.
 
-Use only the private hand plus public information: `lastPlay`, `tablePlays`, `bidHistory`, played-card `log`, roles, and remaining card counts. Never request or infer exact hidden hands from a global view.
+## Applying a strategy
 
-## Decision Priorities
+- Read the complete strategy snapshot after joining and keep it fixed for that match.
+- During bidding, use its bidding section with the current private hand and `bidStage`.
+- During play, select the role section using `roleContext`: landlord, landlord upstream farmer, or landlord downstream farmer.
+- Re-evaluate from the latest private hand and public state after every `seq` change. The model is responsible for recognizing combinations, comparing alternatives, tracking public evidence, and choosing an action.
+- Use `lastPlay.seatId`, `roleContext.landlordSeat`, and `roleContext.teammateSeat` instead of fixed seat labels or screen position.
+- At `phase=over`, use the recorded outcome and decisions to propose strategy changes. Do not rewrite the strategy used by the completed match.
 
-1. Take an immediate legal win whenever available.
-2. Prevent an opponent with very few cards from gaining or keeping the lead, especially when one card remains.
-3. Preserve bombs and the rocket for high-impact control, stopping an imminent opponent win, or securing the finish; do not spend them automatically.
-4. Prefer plays that reduce awkward leftovers while retaining useful pairs, triples, sequences, or a controllable high card.
-5. Track public cards and remaining counts to estimate risk, but do not claim certainty about hidden cards.
+## Information boundary
 
-## Landlord Play
-
-- Treat both farmers as opponents; do not allow either low-card farmer an easy lead.
-- Maintain initiative because no teammate can recover control for you.
-- When safe, shed difficult low cards early and keep enough high-card control to regain the lead near the end.
-
-## Farmer Cooperation
-
-- Treat the other farmer as a teammate even though there is no private communication.
-- Avoid overtaking a teammate's strong lead without a concrete benefit, especially when the teammate has few cards left.
-- Overtake or block when the landlord is likely to win otherwise, when the teammate's lead is unsafe, or when doing so creates a clear team finish.
-- When the teammate is close to empty, prefer passing or a supportive play that lets the teammate retain control.
-- When the landlord has very few cards, prioritize blocking the landlord over improving only your own hand shape.
-
-Choose the best action supported by the available evidence and submit before `turnDeadlineAt`; strategic analysis must not cause a timeout.
+Use only the controlled seat's private cards plus public state: `lastPlay`, `tablePlays`, `bidHistory`, public log, roles, remaining card counts, scoring signals, and deadlines. Never request a global view or claim exact hidden hands.

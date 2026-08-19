@@ -7,22 +7,23 @@ The local MCP server adapts seven tools to the application's HTTP `agent-game.v1
 | Tool | Purpose | Required input |
 | --- | --- | --- |
 | `list_strategies` | List editable Markdown strategies | None |
-| `create_game` | Create a match | Optional `turnTimeoutMs` from 30000 to 60000 |
-| `join_game` | Claim or reconnect to a seat and lock a strategy snapshot | `gameId`, `seatId`, `agentId`; optional `strategyId` |
+| `create_game` | Create a match | Turn timeout is fixed at 60000 ms (1 minute) |
+| `join_game` | Claim or reconnect to a seat and lock a strategy snapshot | `gameId`, `seatId`, `agentId`; optional `displayName`, `strategyId` |
 | `observe_game` | Read one seat's private observation | `gameId`, `seatId` |
 | `start_game` | Mark the controlled seat ready; the third ready seat starts dealing | `gameId`, controlled `seatId` |
 | `submit_action` | Submit one action and an optional public decision summary | `gameId`, `seatId`, `seq`, `action` |
 | `submit_review` | Submit one structured post-game review | `gameId`, `seatId`, `review` |
-| `create_competition` | Create a 3/5/7-round match | `totalRounds`, `turnTimeoutMs` |
+| `create_competition` | Create a 3/5/7-round match | `totalRounds`; turn timeout is fixed at 60000 ms |
 | `observe_competition` | Read scores and the requesting seat's private match context | `competitionId`, `seatId` |
 | `submit_competition_review` | Submit the final multi-round summary | `competitionId`, `seatId`, `review` |
 
 ## Observation
 
 - `phase`: `waiting`, `bid`, `play`, or `over`.
-- `seatControllers`: occupied seats and whether each is a player or Agent.
+- `seatControllers`: occupied seats and whether each is a player or Agent. Each controller has a stable `id` for reconnection and a public `displayName` for the table and replay.
 - `readySeats` and `allReady`: seats whose controllers have confirmed start, independent of merely joining.
 - `landlord`: final landlord seat during play; null while bidding is unresolved.
+- `firstCaller`: first seat that called landlord in the current deal. If a later seat robs, this seat receives one final counter-rob turn.
 - `current`: seat whose turn it is.
 - `you`: observed seat.
 - `isYourTurn`: whether this seat may act.
@@ -33,6 +34,7 @@ The local MCP server adapts seven tools to the application's HTTP `agent-game.v1
 - `turnDeadlineAt` and `serverNow`: absolute timestamps for remaining turn time.
 - `strategy`: the selected Markdown strategy snapshot for this seat.
 - `reviewContext`: available after `phase=over`; contains result, final counts, action statistics, this seat's decisions, and the public action timeline.
+- `roleContext`: dynamic role and position context. `previousSeat` and `nextSeat` describe turn order relative to this Agent. `farmerPosition` is `landlord_upstream` when this farmer acts immediately before the landlord and `landlord_downstream` when it acts immediately after the landlord. It also contains `landlordSeat`, `teammateSeat`, `landlordUpstreamSeat`, and `landlordDownstreamSeat`. Role-dependent values are `null` until bidding resolves. `upstreamSeat` and `downstreamSeat` are compatibility aliases for `previousSeat` and `nextSeat`; never use those aliases to select a role strategy.
 
 ## Actions
 
@@ -42,7 +44,7 @@ The local MCP server adapts seven tools to the application's HTTP `agent-game.v1
 {"type":"pass"}
 ```
 
-In bidding, `value=1` means call or rob according to `bidStage`; `value=0` means decline. During play, card IDs must come from the private hand.
+In bidding, `value=1` means call or rob according to `bidStage`; `value=0` means decline. After the other two seats respond, a changed `landlordCandidate` returns the turn to `firstCaller` for one final counter-rob decision. During play, card IDs must come from the private hand.
 Read [rules.md](rules.md) before selecting cards and [strategy.md](strategy.md) before choosing among legal actions.
 
 An Agent may attach a public decision summary. It is stored in the replay and visible only in the H5 global view or replay:
@@ -59,6 +61,7 @@ An Agent may attach a public decision summary. It is stored in the replay and vi
 - `intent` is optional, maximum 80 characters.
 - `confidence` is optional and ranges from 0 to 1.
 - The server calculates `durationMs`; do not submit it.
+- The server stores each accepted decision with its `gameId` and the seat's strategy `id`, `updatedAt`, and content `hash`. These server-owned fields bind the decision to the immutable strategy snapshot in that replay; do not submit them. Older records may contain `version`, but new strategies do not use numeric versions.
 - Never include hidden chain-of-thought, full prompts, private tool traces, or unsupported hidden-card claims.
 
 ## Card IDs
@@ -95,4 +98,4 @@ The review is saved in replay. It proposes updates to the selected Markdown stra
 
 ## Multi-round competition
 
-Each round has a new `gameId`; the enclosing `competitionId` owns `rounds`, `scores`, and cumulative settlement. Fixed scoring is zero-sum: landlord win `+2/-1/-1`, farmer win `-2/+1/+1`. Round reviews are for immediate adjustment. The final competition review should only retain recurring problems and validated improvements; it should suggest Markdown edits but never modify the file automatically.
+Each round has a new `gameId`; the enclosing `competitionId` owns `rounds`, `scores`, and cumulative settlement. Base scoring is zero-sum: landlord win `+2/-1/-1`, farmer win `-2/+1/+1`. The standard multiplier doubles once for each bomb, rocket, spring, or anti-spring condition. Settlement exposes `baseScore`, `multiplier`, `multiplierReasons`, `bombCount`, `rocketCount`, `spring`, `antiSpring`, and `playsBySeat`; `scoreDelta` already includes the multiplier. Round reviews are for immediate adjustment. The final competition review should only retain recurring problems and validated improvements; it should suggest Markdown edits but never modify the file automatically.

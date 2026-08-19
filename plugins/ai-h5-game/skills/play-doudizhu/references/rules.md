@@ -41,3 +41,10 @@ Do not submit these even if another Dou Dizhu ruleset allows them:
 - Any other compound combination not listed under Supported Plays.
 
 On `illegal_play`, observe again and choose a combination from this reference instead of repeatedly probing the referee.
+
+## Scoring
+
+- Base scoring is zero-sum: landlord win is `+2/-1/-1`; farmer win is `-2/+1/+1` for landlord/farmer/farmer.
+- Each bomb and the rocket doubles the round multiplier.
+- Spring means the landlord wins and neither farmer has played a card; anti-spring means the farmers win, the landlord has played at least one card, and at least one farmer has played no cards. Each condition doubles the multiplier.
+- The settlement's `scoreDelta` already includes the multiplier. Use `multiplierReasons` to explain the result rather than inferring it from the final score.

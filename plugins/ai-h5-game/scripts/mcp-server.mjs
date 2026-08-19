@@ -16,9 +16,9 @@ const tools = [
       properties: {
         turnTimeoutMs: {
           type: 'integer',
-          minimum: 30000,
+          minimum: 60000,
           maximum: 60000,
-          description: 'Turn timeout in milliseconds; defaults to 60000.'
+          description: 'Turn timeout is fixed at 60000 milliseconds (1 minute).'
         }
       },
       additionalProperties: false
@@ -31,7 +31,7 @@ const tools = [
       type: 'object',
       properties: {
         totalRounds: { type: 'integer', enum: [3, 5, 7], description: 'Number of rounds; defaults to 3.' },
-        turnTimeoutMs: { type: 'integer', minimum: 30000, maximum: 60000, description: 'Turn timeout in milliseconds; defaults to 60000.' }
+        turnTimeoutMs: { type: 'integer', minimum: 60000, maximum: 60000, description: 'Turn timeout is fixed at 60000 milliseconds (1 minute).' }
       },
       additionalProperties: false
     }
@@ -82,6 +82,7 @@ const tools = [
         gameId: { type: 'string' },
         seatId: { type: 'integer', minimum: 0, maximum: 2 },
         agentId: { type: 'string' },
+        displayName: { type: 'string', minLength: 1, maxLength: 40, description: 'Public name shown at the table; agentId remains the stable seat identity.' },
         strategyId: { type: 'string', description: 'Markdown strategy id; defaults to the server default.' }
       },
       required: ['gameId', 'seatId', 'agentId'],
