@@ -29,8 +29,10 @@ The local MCP server adapts seven tools to the application's HTTP `agent-game.v1
 - `isYourTurn`: whether this seat may act.
 - `seq`: optimistic concurrency token required by `submit_action`.
 - `allowedActions`: currently accepted action shapes.
-- `hands`: the observed seat has card IDs; other seats expose counts only.
-- `lastPlay` and `tablePlays`: public cards currently on the table.
+- `cardEncoding`: the authoritative rank ordering and suit vocabulary used by the H5 table.
+- `hands`: the observed seat has semantic card objects; other seats expose counts with empty `cards`.
+- `lastPlay`, `tablePlays`, and `bottom`: public card objects currently visible on the table. Each card binds the stable action `id` to `rank`, `suit`, visible `label`, and numeric `strength`.
+- `passCount` and `tablePasses`: consecutive passes after `lastPlay` and their display state. With `lastPlay` present, `passCount=0` means a pass leaves one more seat able to respond; `passCount=1` means the next pass resets the trick and the next seat, which is the current `lastPlay.seatId`, receives the lead.
 - `turnDeadlineAt` and `serverNow`: absolute timestamps for remaining turn time.
 - `strategy`: the selected Markdown strategy snapshot for this seat.
 - `reviewContext`: available after `phase=over`; contains result, final counts, action statistics, this seat's decisions, and the public action timeline.
@@ -44,7 +46,7 @@ The local MCP server adapts seven tools to the application's HTTP `agent-game.v1
 {"type":"pass"}
 ```
 
-In bidding, `value=1` means call or rob according to `bidStage`; `value=0` means decline. After the other two seats respond, a changed `landlordCandidate` returns the turn to `firstCaller` for one final counter-rob decision. During play, card IDs must come from the private hand.
+In bidding, `value=1` means call or rob according to `bidStage`; `value=0` means decline. After the other two seats respond, a changed `landlordCandidate` returns the turn to `firstCaller` for one final counter-rob decision. During play, use card-object semantics to decide and submit only their `id` values. For example, choose `{ "id":"14:0", "rank":"A", "label":"A♠" }` and submit `"14:0"`.
 Read [rules.md](rules.md) before selecting cards and [strategy.md](strategy.md) before choosing among legal actions.
 
 An Agent may attach a public decision summary. It is stored in the replay and visible only in the H5 global view or replay:
@@ -66,10 +68,12 @@ An Agent may attach a public decision summary. It is stored in the replay and vi
 
 ## Card IDs
 
+- Observation card: `{ "id":"14:0", "rank":"A", "suit":"spades", "label":"A♠", "strength":14 }`.
 - Normal card: `<rank>:<suit>`.
 - Ranks `3..15` represent `3..10,J,Q,K,A,2`.
 - Suits `0..3` represent spades, hearts, clubs, and diamonds.
 - `16:0` is the small joker; `17:0` is the big joker.
+- `rank`, `suit`, and `label` are the model-facing semantics. `id` is the action token. `strength` is supplied for comparison and must not be translated back into a face by the Agent.
 
 ## Errors
 

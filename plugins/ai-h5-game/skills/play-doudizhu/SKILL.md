@@ -35,12 +35,14 @@ Control exactly one seat while the independently running H5 game service remains
 3. Select only an action represented by `allowedActions`.
 4. During `phase=bid`, use `bidStage` to interpret `value`: `call` means call or decline; `rob` means rob or decline. If another seat robs, `firstCaller` may receive one final counter-rob turn before the landlord is fixed.
 5. During `phase=play`, use `roleContext` to select the matching section of the locked strategy: `地主策略`, `地主上家策略`, or `地主下家策略`. Use [references/rules.md](references/rules.md) only to interpret legal combinations and [references/strategy.md](references/strategy.md) to understand how the editable strategy relates to this Skill.
-6. Let the model interpret the raw private hand in `hands[].cards`, `lastPlay`, public history, remaining counts, role fields, scoring signals, and the selected strategy. Do not expect an extra server-provided analysis or recommendation field.
-7. Use only card IDs present in the controlled seat's private hand. Never request a global view or infer exact hidden hands.
-8. Submit with the observation's exact `gameId`, `you` as `seatId`, and latest `seq`. Include a concise public `decision` summary when possible, without chain-of-thought, prompts, or private tool traces.
-9. On `stale_state`, observe again and make a new decision from the new state instead of resubmitting blindly.
-10. Continue only as far as requested. For autonomous play, repeat until `phase=over`, observing immediately before every action.
-11. At `phase=over`, use `reviewContext` to submit one evidence-based review. Propose edits to the selected strategy; never modify a strategy during its active match.
+6. Interpret the private hand from the semantic card objects in `hands[].cards`. Use each card's `rank`, `label`, and `strength` for reasoning, and retain its `id` only for action submission. Do not re-derive a face from the numeric ID. A rocket requires one `rank=small_joker` and one `rank=big_joker`. These fields are basic card information, not server-provided hand analysis or recommendations.
+7. Partition the private hand into one or two non-overlapping legal play routes and count the remaining plays for each. Mark routes that require regaining control; a minimum combination count is not a guaranteed finish by itself.
+8. For every candidate response and pass, simulate who acts next from `passCount` and `roleContext.nextSeat`, whether the landlord can interrupt, and how many plays remain. If taking a teammate's play lets this seat finish immediately or through a publicly justified control chain, take it instead of mechanically passing.
+9. Submit only `id` values present in the controlled seat's private card objects. Never request a global view or infer exact hidden hands.
+10. Submit with the observation's exact `gameId`, `you` as `seatId`, and latest `seq`. Include a concise public decision summary when possible; state the remaining-play conclusion when it materially determines the action, without chain-of-thought, prompts, or private tool traces.
+11. On `stale_state`, observe again and make a new decision from the new state instead of resubmitting blindly.
+12. Continue only as far as requested. For autonomous play, repeat until `phase=over`, observing immediately before every action.
+13. At `phase=over`, use `reviewContext` to submit one evidence-based review. Propose edits to the selected strategy; never modify a strategy during its active match.
 
 For a multi-round competition, call `create_competition` with 3, 5, or 7 rounds, then use the returned `currentGameId` with the normal join/start/action loop. Submit one `submit_review` after each round; wait for the next `currentGameId` and prepare all seats again. After the final round, use `observe_competition` and submit one `submit_competition_review` with only problems repeated across rounds and improvements supported by the recorded outcomes.
 
@@ -49,6 +51,9 @@ For a multi-round competition, call `create_competition` with 3, 5, or 7 rounds,
 - `turnTimeoutMs` is fixed at 60000 ms. Use `turnDeadlineAt` and `serverNow` to ensure the model submits within the minute.
 - The deadline limits overlong analysis; it must not create a separate fast-decision policy or change the selected strategy near expiry.
 - Compare the action with `lastPlay`; `tablePlays` is a display field, not the authoritative comparison target.
+- Treat control precisely. When `lastPlay=null` and `current=you`, this seat has the actual lead. When `lastPlay` exists, its `seatId` is only the current high player, not a guaranteed next leader. If `passCount=0`, passing gives `roleContext.nextSeat` another response; if `passCount=1`, passing resets the trick and `roleContext.nextSeat` (the `lastPlay.seatId`) gains the actual lead.
+- When a teammate made `lastPlay`, compare the teammate continuation with this seat's remaining-play route. Overtake for an immediate or controlled finish, a necessary non-single handoff, or another concrete strategy condition; gaining control without a useful continuation remains valueless.
+- Before breaking a pair, triple, sequence, bomb, or rocket, verify that the action prevents an immediate loss or creates a clear team-winning continuation. Do not break structure merely to play more cards or retain control.
 - A pass is available only when represented by `allowedActions`; leading a trick requires a play.
 - Treat tool errors as referee decisions and re-observe after state-related errors.
 - Keep `decision.summary` factual and brief. It records the conclusion, not hidden reasoning.

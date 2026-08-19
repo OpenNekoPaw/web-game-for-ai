@@ -6,6 +6,8 @@ Use these exact MVP rules when choosing `play` or `pass`. The local service is a
 
 Ranks increase as `3 < 4 < 5 < 6 < 7 < 8 < 9 < 10 < J < Q < K < A < 2 < small joker < big joker`. Suits never affect strength.
 
+Use each observed card object's `rank` and `label` as its face and `strength` for ordering. Use `id` only when submitting the selected cards. A rocket requires exactly one `rank=small_joker` and one `rank=big_joker`; never infer a rocket from adjacent numeric IDs.
+
 ## Supported Plays
 
 | Type | Shape | Comparison weight |
