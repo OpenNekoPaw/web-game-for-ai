@@ -66,6 +66,53 @@
 .bid-hint.accepted { border-color: #ffe392aa; background: #6d501dcc; color: #fff0ae; }
 .bid-hint.declined { color: #c3dcf4; }
 
+.avatar {
+  position: relative;
+  isolation: isolate;
+  flex: none;
+  transition: background-color .18s ease, border-color .18s ease, box-shadow .18s ease;
+}
+
+.avatar.role-neutral {
+  border-color: #e4f1ff;
+  background: #6d62bc;
+}
+
+.avatar.role-landlord {
+  border-color: #ffd35b;
+  background: #8b3e3e;
+  box-shadow: 0 0 0 2px #7a501b, 0 4px 12px #08244c88;
+}
+
+.avatar.role-farmer {
+  border-color: #7de6df;
+  background: #267a70;
+  box-shadow: 0 0 0 2px #155c59, 0 4px 12px #08244c88;
+}
+
+.avatar.role-landlord::after,
+.avatar.role-farmer::after {
+  position: absolute;
+  z-index: 1;
+  top: -8px;
+  right: -9px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+  text-shadow: none;
+  box-shadow: 0 2px 5px #08244c88;
+}
+
+.avatar.role-landlord::after { content: "冠"; background: #b47819; }
+.avatar.role-farmer::after { content: "农"; background: #178b82; }
+
 .player strong { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .pass-hint {
@@ -155,5 +202,6 @@
   .seat.opponent .player { width: min(170px, calc(50vw - 25px)); }
   .seat.opponent .player > span:not(.avatar) { min-width: 0; flex: 1; overflow: hidden; }
   .player strong { max-width: 100%; }
-  .avatar { flex: none; }
+  .avatar.role-landlord::after,
+  .avatar.role-farmer::after { top: -7px; right: -8px; width: 20px; height: 20px; font-size: 10px; }
 }

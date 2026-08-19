@@ -14,6 +14,7 @@ let state = null;
 let replay = null;
 let replayIndex = 0;
 let replayTimer = null;
+let replayCanRematch = false;
 let selected = new Set();
 let botBusy = false;
 let refreshing = false;
@@ -79,6 +80,8 @@ async function loadReplay() {
     $('replay-controls').hidden = false;
     $('new-game').hidden = false;
     $('new-game').textContent = '退出回放';
+    const finalState = data.frames.at(-1)?.state;
+    replayCanRematch = finalState?.phase === 'over' && ['landlord', 'farmers'].includes(finalState.winner);
     showReplayFrame(0);
   } catch (error) { setConnectionError(error); }
 }
@@ -166,18 +169,30 @@ async function refresh() {
 
 function setConnectionError(error) { showMessage(`无法连接服务：${error.message}`, true); }
 
+function playerPosition(id) { return id === seat ? 'self' : id === (seat + 2) % 3 ? 'left' : 'right'; }
+
 function renderCountdown() {
-  const element = $('countdown');
-  if (!element) return;
+  ['left', 'right', 'self'].forEach((position) => {
+    const timer = $(`${position}-countdown`);
+    timer.hidden = true;
+    timer.textContent = '';
+    timer.classList.remove('urgent');
+    $(`${position}-seat`).classList.remove('current-turn');
+  });
   const visible = !replayMode && Boolean(state) && state.phase !== 'waiting' && state.winner === null && Boolean(state.turnDeadlineAt);
-  element.hidden = !visible;
-  if (!visible) { element.textContent = ''; element.classList.remove('urgent'); return; }
+  if (!visible) return;
   const remainingMs = Math.max(0, state.turnDeadlineAt - (Date.now() + serverClockOffsetMs));
   const totalSeconds = Math.ceil(remainingMs / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = String(totalSeconds % 60).padStart(2, '0');
-  element.textContent = `剩余 ${minutes}:${seconds}`;
+  const position = playerPosition(state.current);
+  const element = $(`${position}-countdown`);
+  const remaining = `${minutes}:${seconds}`;
+  element.hidden = false;
+  element.textContent = `剩余 ${remaining}`;
+  element.setAttribute('aria-label', `玩家 ${['A', 'B', 'C'][state.current]} 剩余时间 ${remaining}`);
   element.classList.toggle('urgent', totalSeconds <= 10);
+  $(`${position}-seat`).classList.add('current-turn');
 }
 
 async function advanceBots() {
@@ -201,7 +216,7 @@ function render() {
   renderCompetition();
   setPlayer('left', left, labels, roles, controllers);
   setPlayer('right', right, labels, roles, controllers);
-  $('self-avatar').textContent = labels[seat]; $('self-name').textContent = `${roles(seat)} ${labels[seat]} · ${controllers(seat)}`; $('self-name').title = state.seatControllers?.[seat]?.id || ''; $('self-count').textContent = state.phase === 'waiting' ? readyLabel(seat) : `${state.hands[seat].count} 张`;
+  renderAvatar($('self-avatar'), seat, labels[seat]); $('self-name').textContent = `${roles(seat)} ${labels[seat]} · ${controllers(seat)}`; $('self-name').title = state.seatControllers?.[seat]?.id || ''; $('self-count').textContent = state.phase === 'waiting' ? readyLabel(seat) : `${state.hands[seat].count} 张`;
   renderSelfHand(state.hands[seat].cards);
   renderBottomCards(state.bottom);
   renderTablePlays();
@@ -209,6 +224,7 @@ function render() {
   renderStrategies();
   renderDecisions();
   renderReviews();
+  $('rematch-game').hidden = replayMode ? !replayCanRematch : state.phase !== 'over' || !['landlord', 'farmers'].includes(state.winner);
   document.querySelectorAll('.perspectives button').forEach((button) => button.classList.toggle('active', Number(button.dataset.seat) === seat));
   $('global-view').classList.toggle('active', view === 'global'); $('global-view').setAttribute('aria-pressed', String(view === 'global'));
   $('bid').textContent = bidLabel;
@@ -522,7 +538,8 @@ function createHistoryItem(record) {
   }
   heading.append(`${status}${competition}${multiplier}`);
   const metadata = document.createElement('span');
-  metadata.textContent = `${formatRecordTime(record.createdAt)} · ${record.frameCount} 帧`;
+  metadata.textContent = `${formatRecordTime(record.createdAt)} · ${record.frameCount} 帧${record.sourceGameId ? ' · 同牌复战' : ''}`;
+  if (record.sourceGameId) metadata.title = `来源对局 ${record.sourceGameId}`;
   const participantList = document.createElement('small');
   participants.forEach((participant) => {
     const line = document.createElement('span');
@@ -594,13 +611,14 @@ function renderLifecycle() {
   container.hidden = false;
   if (state.phase === 'waiting') {
     selectedRounds = state.competition?.totalRounds || 1;
-    setup.hidden = false;
+    const rematch = Boolean(state.sourceGameId);
+    setup.hidden = rematch;
     const canConfigure = Object.keys(state.seatControllers || {}).length === 0;
     document.querySelectorAll('[data-rounds]').forEach((roundButton) => { const rounds = Number(roundButton.dataset.rounds); roundButton.classList.toggle('active', rounds === selectedRounds); roundButton.disabled = !canConfigure; });
     const readyCount = state.readySeats?.length || 0;
     const selfReady = state.readySeats?.includes(controlledSeat);
-    $('game-status').textContent = selfReady ? '等待其他玩家' : '等待玩家准备';
-    $('ready-status').textContent = `${readyCount} / 3 已就绪`;
+    $('game-status').textContent = rematch ? selfReady ? '同牌复战，等待其他玩家' : '同牌复战，等待玩家准备' : selfReady ? '等待其他玩家' : '等待玩家准备';
+    $('ready-status').textContent = `${rematch ? `来源 ${state.sourceGameId} · ` : ''}${readyCount} / 3 已就绪`;
     button.textContent = '开始对局';
     button.hidden = !controlActive || selfReady;
     button.disabled = false;
@@ -640,7 +658,15 @@ function controllerLabel(id) {
   if (replayMode) return 'Bot';
   return controlActive && id === controlledSeat ? '玩家' : 'Bot';
 }
-function setPlayer(position, id, labels, roles, controllers) { $(`${position}-avatar`).textContent = labels[id]; $(`${position}-name`).textContent = `${roles(id)} ${labels[id]} · ${controllers(id)}`; $(`${position}-name`).title = state.seatControllers?.[id]?.id || ''; $(`${position}-count`).textContent = state.phase === 'waiting' ? readyLabel(id) : `${state.hands[id].count} 张`; renderOpponentHand(position, id); }
+function setPlayer(position, id, labels, roles, controllers) { renderAvatar($(`${position}-avatar`), id, labels[id]); $(`${position}-name`).textContent = `${roles(id)} ${labels[id]} · ${controllers(id)}`; $(`${position}-name`).title = state.seatControllers?.[id]?.id || ''; $(`${position}-count`).textContent = state.phase === 'waiting' ? readyLabel(id) : `${state.hands[id].count} 张`; renderOpponentHand(position, id); }
+function renderAvatar(element, id, label) {
+  const role = ['play', 'over'].includes(state.phase) ? (state.landlord === id ? 'landlord' : 'farmer') : 'neutral';
+  const roleLabel = role === 'landlord' ? '地主' : role === 'farmer' ? '农民' : '身份待定';
+  element.textContent = label;
+  element.className = `avatar role-${role}`;
+  element.dataset.role = role;
+  element.setAttribute('aria-label', `${label}，${roleLabel}`);
+}
 function readyLabel(id) { return state.readySeats?.includes(id) ? '已就绪' : state.seatControllers?.[id] ? '等待开始' : '等待加入'; }
 function toggle(id, visible) { $(id).hidden = !visible; }
 
@@ -670,7 +696,7 @@ function renderTablePlays() {
     const bidsBySeat = new Map();
     (state.bidHistory || []).forEach((entry) => bidsBySeat.set(entry.seatId, [...(bidsBySeat.get(entry.seatId) || []), entry]));
     bidsBySeat.forEach((entries, seatId) => {
-      const slot = seatId === seat ? 'self-play' : seatId === (seat + 2) % 3 ? 'left-play' : 'right-play';
+      const slot = `${playerPosition(seatId)}-play`;
       const hint = document.createElement('span');
       hint.className = `bid-hint ${entries.at(-1).value ? 'accepted' : 'declined'}`;
       hint.textContent = entries.map((entry) => entry.stage === 'rob' ? entry.value ? '抢地主' : '不抢' : entry.value ? '叫地主' : '不叫').join(' → ');
@@ -678,17 +704,17 @@ function renderTablePlays() {
     });
     return;
   }
-  const tablePlays = state.tablePlays || [null, null, null];
-  tablePlays.forEach((cards, seatId) => {
-    if (!cards?.length) return;
-    const slot = seatId === seat ? 'self-play' : seatId === (seat + 2) % 3 ? 'left-play' : 'right-play';
-    $(slot).appendChild(createStaticCardGroup(cards, 'compact'));
-  });
-  (state.tablePasses || []).forEach((passed, seatId) => {
-    if (!passed) return;
-    const slot = seatId === seat ? 'self-play' : seatId === (seat + 2) % 3 ? 'left-play' : 'right-play';
-    const hint = document.createElement('span'); hint.className = 'pass-hint'; hint.textContent = '不要'; $(slot).replaceChildren(hint);
-  });
+  const lastActor = state.winner !== null
+    ? state.lastPlay?.seatId
+    : Number.isInteger(state.current) ? (state.current + 2) % 3 : null;
+  if (!Number.isInteger(lastActor)) return;
+  const slot = `${playerPosition(lastActor)}-play`;
+  if (state.tablePasses?.[lastActor]) {
+    const hint = document.createElement('span'); hint.className = 'pass-hint'; hint.textContent = '不要'; $(slot).appendChild(hint);
+    return;
+  }
+  const cards = state.tablePlays?.[lastActor];
+  if (cards?.length) $(slot).appendChild(createStaticCardGroup(cards, 'compact'));
 }
 
 function cardId(card) { return typeof card === 'string' ? card : card?.id; }
@@ -701,7 +727,7 @@ async function action(payload) {
   catch (error) { setConnectionError(error); }
 }
 
-function errorText(error) { return ({ invalid_action:'动作格式错误', illegal_play:'这组牌不能出', cannot_pass_first:'你需要先出牌', cards_not_in_hand:'手牌状态已变化', not_your_turn:'还没轮到你', invalid_bid:'叫地主动作无效', game_not_started:'对局还未开始', players_not_ready:'请等待三家全部准备就绪', game_already_started:'对局已经开始', seat_occupied:'座位已被占用', seat_not_joined:'请先加入一个座位' }[error] || error || '动作未接受'); }
+function errorText(error) { return ({ invalid_action:'动作格式错误', illegal_play:'这组牌不能出', cannot_pass_first:'你需要先出牌', cards_not_in_hand:'手牌状态已变化', not_your_turn:'还没轮到你', invalid_bid:'叫地主动作无效', game_not_started:'对局还未开始', players_not_ready:'请等待三家全部准备就绪', game_already_started:'对局已经开始', seat_occupied:'座位已被占用', seat_not_joined:'请先加入一个座位', rematch_source_not_completed:'只能复战已完成的对局', rematch_source_invalid:'来源对局缺少有效初始牌局' }[error] || error || '动作未接受'); }
 function switchSeat(nextSeat) { seat = normalizeSeat(nextSeat); selected.clear(); syncUrl(); replayMode ? render() : refresh(); }
 function switchView(nextView) { view = normalizeView(nextView); selected.clear(); syncUrl(); replayMode ? render() : refresh(); }
 function openReplay(targetGameId) {
@@ -715,7 +741,30 @@ function openReplay(targetGameId) {
 
 function openGameRecord() { setHistoryPanel($('history-panel').hidden); }
 
+async function createReplayRematch() {
+  const sourceGameId = replayMode ? replayGameId : gameId;
+  if (!sourceGameId) return;
+  const button = $('rematch-game');
+  button.disabled = true;
+  button.textContent = '创建中…';
+  try {
+    const response = await fetch(`/api/replays/${encodeURIComponent(sourceGameId)}/rematch`, { method: 'POST' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'rematch_failed');
+    const target = new URL('/', location.origin);
+    target.searchParams.set('game', data.gameId);
+    target.searchParams.set('seat', seat);
+    if (view === 'global') target.searchParams.set('view', 'global');
+    location.assign(target.href);
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = '同牌复战';
+    showMessage(errorText(error.message), true);
+  }
+}
+
 $('new-game').onclick = () => { if (replayMode) location.href = replayReturn?.startsWith('/?') ? replayReturn : '/?seat=0'; };
+$('rematch-game').onclick = createReplayRematch;
 $('start-game').onclick = () => state?.phase === 'over' ? create(selectedRounds) : start();
 $('game-record').onclick = openGameRecord;
 $('strategy-record').onclick = () => setStrategyPanel($('strategy-panel').hidden);

@@ -37,10 +37,10 @@
   .bottom-cards .card{width:3.3em;height:4.7em;font-size:1em}
 }
 .game-info .view-toggle{padding:7px 11px;border:1px solid #d0e6ff55;border-radius:999px;background:#0c37705c;color:#dbeaff;font-weight:700}
-.game-info .countdown{font-variant-numeric:tabular-nums;color:#fff}
-.game-info .countdown.urgent{background:#9b3030cc;color:#fff2f2}
-.turn-timer{position:absolute;top:42%;left:50%;transform:translate(-50%,-50%);z-index:2;padding:9px 18px;border:1px solid #d0e6ff66;border-radius:999px;background:#0c377080;color:#fff;font-size:22px;font-weight:800;letter-spacing:.03em;text-shadow:0 2px 4px #08244c88;pointer-events:none}
-.turn-timer.urgent{background:#9b3030dd;color:#fff2f2}
+.player .seat-timer{display:inline-flex;width:max-content;align-items:center;margin-top:5px;padding:3px 7px;border:1px solid #d0e6ff77;border-radius:6px;background:#0c3770b8;color:#fff;font-size:12px;font-variant-numeric:tabular-nums;font-weight:800;letter-spacing:0;box-shadow:0 2px 6px #08244c55}
+.player .seat-timer[hidden]{display:none}
+.player .seat-timer.urgent{border-color:#ffb8b8;background:#9b3030e8;color:#fff2f2}
+.seat.current-turn .avatar{outline:2px solid #fff;outline-offset:3px}
 .game-info .view-toggle.active{background:#fff;color:#1d5596}
 .opponent-face{width:280px;min-height:108px;margin-top:12px}
 .opponent-face .playingCards{width:100%}
@@ -52,7 +52,7 @@
 .seat-right .opponent-face .hand{justify-content:flex-end}
 @media(max-width:760px){
   .game-info .view-toggle{padding:6px 8px;font-size:11px}
-  .turn-timer{top:40%;font-size:18px;padding:7px 14px}
+  .player .seat-timer{margin-top:3px;padding:2px 5px;font-size:10px}
   .opponent-face{width:170px;min-height:82px}
   .opponent-face .playingCards .hand{min-height:76px;max-width:170px}
   .opponent-face .card{width:1.7em;height:2.45em;font-size:.75em}
