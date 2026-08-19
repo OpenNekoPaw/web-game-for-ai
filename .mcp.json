@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "ai-h5-game": {
+      "command": "node",
+      "args": ["./mcp-server.js"],
+      "cwd": "."
+    }
+  }
+}

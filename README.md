@@ -159,6 +159,31 @@ codex plugin add ai-h5-game@ai-h5-game-local
 
 安装或更新插件后，在新任务中调用 `$play-doudizhu`。当前 MVP 将应用与插件保存在同一个仓库；当二者需要独立版本、权限或发布周期时，再拆分仓库。
 
+## 通用 Agent 接入
+
+除了 Codex 插件，仓库也提供标准文件方便其他 Agent 接入：
+
+- 根目录 `.mcp.json`：支持该格式的 MCP 客户端可以直接连接 `mcp-server.js`。
+- `.agents/skills/play-doudizhu/`：支持该 Skill 目录约定的 Agent 可直接发现 `play-doudizhu`。
+- `config/dsh/cordis.patch.yml`：DeepSeek Harness（DSH）的 MCP 接入 patch。
+
+### DeepSeek Harness（DSH）
+
+先启动游戏服务，再从仓库根目录启动 DSH：
+
+```bash
+npm start
+pnpm dsh web --patch ./config/dsh/cordis.patch.yml
+```
+
+DSH 会自动发现 `.agents/skills/play-doudizhu/`，并通过 `@deepseek-ai/dsh-mcp-client` 暴露 `mcp__ddz__*` 工具。详细说明见 [config/dsh/README.md](config/dsh/README.md)。
+
+### 其他 MCP / Skill 客户端
+
+- 支持 `.mcp.json` 的 Agent：直接读取根目录 `.mcp.json`。
+- 支持 `.agents/skills/` 的 Agent：直接读取 `.agents/skills/play-doudizhu/`。
+- 如果 Agent 需要原始工具名而不是 `mcp__ddz__*` 前缀，可参照 `docs/codex-mcp.toml` 自行配置 MCP Server 路径。
+
 ## 架构
 
 `game/ddz.js` 是独立斗地主规则适配器；`server.js` 是本地裁判服务；`public/` 是 H5 观战与人工操作界面；`strategies/` 保存可替换实验策略；Codex 插件负责让模型通过统一协议接入。后续增加围棋或国际象棋时，复用对局、Agent、计时、记录、比赛和复盘外壳，并新增对应规则适配器与策略方案。
