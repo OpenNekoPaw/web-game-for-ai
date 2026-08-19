@@ -6,6 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "mcp": "node mcp-server.js",
+    "build:binary": "bash scripts/build-binary.sh",
+    "test:binary": "bash scripts/test-binary.sh",
     "test": "REPLAY_PERSISTENCE=memory node --test"
   }
 }

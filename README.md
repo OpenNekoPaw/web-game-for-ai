@@ -18,6 +18,32 @@ npm start
 npm test
 ```
 
+## Linux 二进制
+
+从 GitHub Actions 的 `Linux Binary` 流程下载与服务器架构对应的产物：
+
+- `agent-game-ddz-linux-amd64`
+- `agent-game-ddz-linux-arm64`
+
+解压 Actions 产物后校验并启动：
+
+```bash
+sha256sum -c agent-game-ddz-linux-<arch>.sha256
+tar -xzf agent-game-ddz-linux-<arch>.tar.gz
+PORT=3000 ./ddz-server
+```
+
+运行二进制不需要安装 Node.js 或 Bun。`share/` 必须和 `ddz-server` 保持在同一目录，对局记录默认写入同目录的 `records/`。
+
+本地安装 Bun 后，也可以生成当前平台的发布目录：
+
+```bash
+npm run build:binary
+PORT=3000 ./dist/ddz-server
+```
+
+CI 会在 Linux AMD64 和 ARM64 上运行测试、构建二进制、启动验证并上传压缩包与 SHA256 校验文件。
+
 ## 页面操作
 
 - 等待三家加入后，各席分别点击“开始对局”，三家准备完成后自动发牌。
@@ -38,6 +64,7 @@ http://localhost:3000/?replay=<gameId>&view=global
 ## Agent 接入
 
 Agent 通过 HTTP 或 MCP 接入，普通玩家和 Agent 可以混合对局。每个席位需要先加入，再确认开始；每回合有 60 秒处理时间。
+页面左上角的 `Agent 接入` 可选择 Codex、通用 MCP 或 HTTP，并复制对应配置及当前 Skill。
 
 启动 MCP Server：
 
