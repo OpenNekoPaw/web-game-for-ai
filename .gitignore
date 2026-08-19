@@ -21,6 +21,11 @@ build/
 .tmp/
 tmp/
 
+# Local Agent verification artifacts
+test/verify-seat-*.md
+test/verify-*-seat-*.md
+test/verify-match-summary.py
+
 # Editor and operating-system files
 .DS_Store
 Thumbs.db
