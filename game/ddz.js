@@ -73,13 +73,15 @@ export function canBeat(candidate, previous) {
 function shuffle(cards) { const a = [...cards]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
 function randomSeat() { return Math.floor(Math.random() * 3); }
 
-function startBidding(state, message) {
-  const deck = shuffle(createDeck());
+function startBidding(state, message, presetDeal = null) {
+  const deck = presetDeal ? null : shuffle(createDeck());
   state.phase = 'bid';
-  state.hands = [deck.slice(0, 17), deck.slice(17, 34), deck.slice(34, 51)].map(sortCards);
-  state.bottom = deck.slice(51);
+  state.hands = presetDeal
+    ? presetDeal.hands.map((hand) => sortCards(hand))
+    : [deck.slice(0, 17), deck.slice(17, 34), deck.slice(34, 51)].map(sortCards);
+  state.bottom = presetDeal ? [...presetDeal.bottom] : deck.slice(51);
   state.landlord = null;
-  state.firstBidder = randomSeat();
+  state.firstBidder = presetDeal ? presetDeal.firstBidder : randomSeat();
   state.firstCaller = null;
   state.current = state.firstBidder;
   state.bidStage = 'call';
@@ -137,9 +139,9 @@ export function createGame(gameId = `ddz-${Date.now()}`) {
   };
 }
 
-export function startGame(state) {
+export function startGame(state, presetDeal = null) {
   if (state.phase !== 'waiting') throw new Error('game_already_started');
-  startBidding(state, '对局开始');
+  startBidding(state, presetDeal ? '同牌复战开始' : '对局开始', presetDeal);
   state.seq++;
 }
 
@@ -154,6 +156,7 @@ export function publicState(state, seatId = null, debug = false) {
   return {
     gameId: state.gameId,
     game: state.game,
+    sourceGameId: state.sourceGameId ?? null,
     phase: state.phase,
     landlord: state.landlord,
     firstBidder: state.firstBidder,

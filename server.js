@@ -2,7 +2,7 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createCompetition, createMatch, getMatch, getMatchStrategies, getReplay, getStrategies, joinMatch, joinPlayerMatch, observeCompetition, observeMatch, runBot, startMatch, submitCompetitionReview, submitMatchAction, submitMatchReview, tickMatches } from './game/store.js';
+import { createCompetition, createMatch, createRematch, getMatch, getMatchStrategies, getReplay, getStrategies, joinMatch, joinPlayerMatch, observeCompetition, observeMatch, runBot, startMatch, submitCompetitionReview, submitMatchAction, submitMatchReview, tickMatches } from './game/store.js';
 import { listReplays } from './game/replay-store.js';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
@@ -34,6 +34,11 @@ const server = http.createServer(async (req, res) => {
     }
     const replayMatch = url.pathname.match(/^\/api\/replays\/([^/]+)$/);
     if (req.method === 'GET' && replayMatch) { try { return json(res, 200, getReplay(replayMatch[1])); } catch (error) { return json(res, error.message === 'replay_not_found' ? 404 : 400, { error: error.message }); } }
+    const replayRematch = url.pathname.match(/^\/api\/replays\/([^/]+)\/rematch$/);
+    if (req.method === 'POST' && replayRematch) {
+      try { await body(req); const game = createRematch(replayRematch[1]); return json(res, 201, { protocol:'agent-game.v1', gameId:game.gameId, sourceGameId:game.sourceGameId, turnTimeoutMs:game.turnTimeoutMs }); }
+      catch (error) { return json(res, error.message === 'replay_not_found' ? 404 : 400, { error:error.message }); }
+    }
     if (req.method === 'POST' && (url.pathname === '/api/games' || url.pathname === '/agent/v1/games')) { const data = await body(req); const game = createMatch(data); return json(res, 201, { protocol:'agent-game.v1', gameId: game.gameId, turnTimeoutMs: game.turnTimeoutMs }); }
     const agentMatch = url.pathname.match(/^\/agent\/v1\/games\/([^/]+)\/(join|observe|start|actions|review)$/);
     if (agentMatch) {

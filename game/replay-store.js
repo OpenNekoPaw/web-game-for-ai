@@ -12,6 +12,7 @@ export function createReplay(gameId, state, participants = {}) {
     format: 'agent-game.replay.v1',
     gameId,
     game: state.game,
+    sourceGameId: state.sourceGameId ?? null,
     createdAt: now,
     updatedAt: now,
     completedAt: null,
@@ -108,6 +109,7 @@ function replaySummary(replay) {
   return {
     gameId: replay.gameId,
     game: replay.game,
+    sourceGameId: replay.sourceGameId ?? state.sourceGameId ?? null,
     createdAt: replay.createdAt,
     updatedAt: replay.updatedAt,
     completedAt: replay.completedAt,

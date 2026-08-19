@@ -1,4 +1,4 @@
-import { applyAction, chooseSimpleAction, createGame, publicState, startGame } from './ddz.js';
+import { applyAction, chooseSimpleAction, createDeck, createGame, publicState, startGame } from './ddz.js';
 import { appendReplayFrame, createReplay, readReplay, updateReplayParticipants } from './replay-store.js';
 import { getStrategy, listStrategies } from './strategy-store.js';
 
@@ -23,6 +23,8 @@ export function createMatch(options = {}) {
   game.actionStats = [createActionStats(), createActionStats(), createActionStats()];
   game.competitionId = options.competitionId || null;
   game.roundNumber = options.roundNumber || 1;
+  game.sourceGameId = options.sourceGameId || null;
+  game.presetDeal = options.presetDeal ? structuredClone(options.presetDeal) : null;
   game.settlement = null;
   game.turnTimeoutMs = normalizeTurnTimeout(options.turnTimeoutMs ?? configuredTurnTimeoutMs);
   clearTurnClock(game);
@@ -53,6 +55,15 @@ export function createCompetition(options = {}) {
   competition.currentGameId = game.gameId;
   competition.gameIds.push(game.gameId);
   return observeCompetition(competitionId);
+}
+
+export function createRematch(sourceGameId) {
+  const replay = readReplay(sourceGameId);
+  const finalState = replay.frames.at(-1)?.state;
+  if (finalState?.phase !== 'over' || !['landlord', 'farmers'].includes(finalState.winner)) throw new Error('rematch_source_not_completed');
+  const presetDeal = extractReplayDeal(replay);
+  const rootSourceGameId = replay.sourceGameId || finalState.sourceGameId || sourceGameId;
+  return createMatch({ sourceGameId: rootSourceGameId, presetDeal });
 }
 
 export function observeCompetition(competitionId, seatId = null, options = {}) {
@@ -139,7 +150,7 @@ export function startMatch(gameId, seatId = null) {
   const wasReady = game.ready.has(seatId);
   game.ready.add(seatId);
   if (occupiedSeats(game).length === 3 && game.ready.size === 3) {
-    startGame(game);
+    startGame(game, game.presetDeal);
     if (game.competitionId) requireCompetition(game.competitionId).status = 'playing';
     resetTurnClock(game);
     recordFrame(game, { type: 'started', seatId });
@@ -349,6 +360,28 @@ function replayState(game, now = Date.now()) {
     serverNow: now
   };
 }
+
+function extractReplayDeal(replay) {
+  const frame = replay.frames.find((entry) => entry.event?.type === 'started' && entry.state?.phase === 'bid');
+  const state = frame?.state;
+  const hands = state?.hands?.map((hand) => hand.cards?.map(replayCardId));
+  const bottom = state?.bottom?.map(replayCardId);
+  const cards = [...(hands?.flat() || []), ...(bottom || [])];
+  const expectedDeck = createDeck();
+  const valid = Array.isArray(hands)
+    && hands.length === 3
+    && hands.every((hand) => Array.isArray(hand) && hand.length === 17)
+    && Array.isArray(bottom)
+    && bottom.length === 3
+    && [0, 1, 2].includes(state.firstBidder)
+    && cards.length === expectedDeck.length
+    && new Set(cards).size === expectedDeck.length
+    && expectedDeck.every((card) => cards.includes(card));
+  if (!valid) throw new Error('rematch_source_invalid');
+  return { hands, bottom, firstBidder: state.firstBidder };
+}
+
+function replayCardId(card) { return typeof card === 'string' ? card : card?.id; }
 
 function ensureTurnClock(game, now = Date.now()) {
   if (!game.turnTimeoutMs) game.turnTimeoutMs = configuredTurnTimeoutMs;
