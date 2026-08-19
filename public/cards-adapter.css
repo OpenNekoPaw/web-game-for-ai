@@ -42,27 +42,27 @@
 .player .seat-timer.urgent{border-color:#ffb8b8;background:#9b3030e8;color:#fff2f2}
 .seat.current-turn .avatar{outline:2px solid #fff;outline-offset:3px}
 .game-info .view-toggle.active{background:#fff;color:#1d5596}
-.opponent-face{width:320px;min-height:126px;margin-top:12px}
-.opponent-face .playingCards{width:100%}
-.opponent-face .playingCards .hand{height:auto;min-height:118px;max-width:320px;align-items:flex-start;align-content:flex-start;justify-content:flex-start;flex-wrap:wrap;gap:0;padding:0}
-.opponent-face .card{width:2.15em;height:3.1em;font-size:1em;cursor:default;box-shadow:.1em .15em .35em #06265a55}
+.opponent-face,.opponent-back-stack{width:320px;min-height:126px;margin-top:12px}
+.opponent-face .playingCards,.opponent-back-stack .playingCards{width:100%}
+.opponent-face .playingCards .hand,.opponent-back-stack .playingCards .hand{height:auto;min-height:118px;max-width:320px;align-items:flex-start;align-content:flex-start;justify-content:flex-start;flex-wrap:wrap;gap:0;padding:0}
+.opponent-face .card,.opponent-back-stack .card{width:2.15em;height:3.1em;font-size:1em;cursor:default;box-shadow:.1em .15em .35em #06265a55}
 .opponent-face .card:hover{transform:none}
-.opponent-face .hand>li{margin-left:-.35em}
-.opponent-face .hand>li:first-child{margin-left:0}
-.seat-right .opponent-face .hand{justify-content:flex-end}
+.opponent-face .hand>li,.opponent-back-stack .hand>li{margin-left:-.35em}
+.opponent-face .hand>li:first-child,.opponent-back-stack .hand>li:first-child{margin-left:0}
+.seat-right .opponent-face .hand,.seat-right .opponent-back-stack .hand{justify-content:flex-end}
 @media(max-width:760px){
   .game-info .view-toggle{padding:6px 8px;font-size:11px}
   .player .seat-timer{margin-top:3px;padding:2px 5px;font-size:10px}
-  .opponent-face{width:154px;min-height:88px}
-  .opponent-face .playingCards .hand{min-height:84px;max-width:154px}
-  .opponent-face .card{width:1.8em;height:2.55em;font-size:.8em}
-  .opponent-face .hand>li{margin-left:-.72em}
+  .opponent-face,.opponent-back-stack{width:154px;min-height:88px}
+  .opponent-face .playingCards .hand,.opponent-back-stack .playingCards .hand{min-height:84px;max-width:154px}
+  .opponent-face .card,.opponent-back-stack .card{width:1.8em;height:2.55em;font-size:.8em}
+  .opponent-face .hand>li,.opponent-back-stack .hand>li{margin-left:-.72em}
 }
 
 @media(min-width:761px) and (max-width:1100px){
-  .opponent-face{width:240px;min-height:116px}
-  .opponent-face .playingCards .hand{min-height:108px;max-width:240px}
-  .opponent-face .card{width:2em;height:2.95em;font-size:.9em}
+  .opponent-face,.opponent-back-stack{width:240px;min-height:116px}
+  .opponent-face .playingCards .hand,.opponent-back-stack .playingCards .hand{min-height:108px;max-width:240px}
+  .opponent-face .card,.opponent-back-stack .card{width:2em;height:2.95em;font-size:.9em}
   .seat-left .played-slot{left:calc(100% + 16px)}
   .seat-right .played-slot{right:calc(100% + 16px)}
 }

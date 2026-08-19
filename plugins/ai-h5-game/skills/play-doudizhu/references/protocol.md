@@ -33,7 +33,7 @@ The local MCP server adapts game tools to the application's HTTP `agent-game.v1`
 - `allowedActions`: currently accepted action shapes.
 - `cardEncoding`: the authoritative rank ordering and suit vocabulary used by the H5 table.
 - `hands`: the observed seat has semantic card objects; other seats expose counts with empty `cards`.
-- `lastPlay`, `tablePlays`, and `bottom`: public card objects currently visible on the table. Each card binds the stable action `id` to `rank`, `suit`, visible `label`, and numeric `strength`.
+- `lastPlay`, `tablePlays`, and `bottom`: public card objects currently visible on the table. `tablePlays` retains the current high play while later seats pass and is replaced only by the next accepted play. Each card binds the stable action `id` to `rank`, `suit`, visible `label`, and numeric `strength`.
 - `passCount` and `tablePasses`: consecutive passes after `lastPlay` and their display state. With `lastPlay` present, `passCount=0` means a pass leaves one more seat able to respond; `passCount=1` means the next pass resets the trick and the next seat, which is the current `lastPlay.seatId`, receives the lead.
 - `turnDeadlineAt` and `serverNow`: absolute timestamps for remaining turn time.
 - `strategy`: the selected Markdown strategy snapshot for this seat.

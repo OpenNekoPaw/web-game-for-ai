@@ -236,14 +236,14 @@ export function applyAction(state, seatId, action) {
   }
   if (action.type === 'pass') {
     if (!state.lastPlay) throw new Error('cannot_pass_first');
-    state.tablePasses[seatId] = true; state.passCount++; state.log.push(`座位${seatId} 不要`); if (state.passCount >= 2) { state.lastPlay = null; state.tablePlays = [null, null, null]; state.passCount = 0; } state.current = (seatId + 1) % 3; state.seq++; return;
+    state.tablePasses[seatId] = true; state.passCount++; state.log.push(`座位${seatId} 不要`); if (state.passCount >= 2) { state.lastPlay = null; state.passCount = 0; } state.current = (seatId + 1) % 3; state.seq++; return;
   }
   if (state.phase !== 'play') throw new Error('invalid_action');
   if (action.type !== 'play' || !Array.isArray(action.cards)) throw new Error('invalid_action');
   const hand = state.hands[seatId]; if (new Set(action.cards).size !== action.cards.length || action.cards.some(c => !hand.includes(c))) throw new Error('cards_not_in_hand');
   const play = describePlay(action.cards); if (!canBeat(play, state.lastPlay)) throw new Error('illegal_play');
   const playedCards = sortCards(action.cards);
-  if (!state.lastPlay) { state.tablePlays = [null, null, null]; state.tablePasses = [false, false, false]; }
+  state.tablePlays = [null, null, null]; state.tablePasses = [false, false, false];
   state.tablePasses[seatId] = false; state.hands[seatId] = hand.filter(c => !action.cards.includes(c)); state.lastPlay = { ...play, seatId, cards: playedCards }; state.tablePlays[seatId] = playedCards; state.passCount = 0; state.log.push(`座位${seatId} 出牌 ${action.cards.map(cardLabel).join(' ')}`);
   state.playsBySeat ||= [0, 0, 0]; state.playsBySeat[seatId] += 1;
   if (play.type === 'bomb') state.bombCount = (state.bombCount || 0) + 1;

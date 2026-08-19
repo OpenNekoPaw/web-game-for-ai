@@ -149,7 +149,32 @@
 
 .table { transition: right .18s ease; }
 .table.decisions-open { right: 380px; }
-.game-info #strategy-record.active, .game-info #decision-record.active, .game-info #review-record.active, .game-info #game-record.active { background: var(--gold); color: #5b3b04; }
+.game-info #strategy-record.active, .game-info #decision-record.active, .game-info #review-record.active, .game-info #game-record.active, .game-info #agent-connect.active { background: var(--gold); color: #5b3b04; }
+
+.agent-type-menu {
+  position: fixed;
+  z-index: 30;
+  width: 218px;
+  padding: 5px;
+  border: 1px solid #d0e6ff66;
+  border-radius: 9px;
+  background: #123f7cf7;
+  box-shadow: 0 12px 28px #08244c88;
+}
+.agent-type-menu[hidden] { display: none; }
+.agent-type-menu button { display: block; width: 100%; padding: 9px 10px; border: 0; border-radius: 6px; background: transparent; color: #fff; text-align: left; cursor: pointer; }
+.agent-type-menu button:hover, .agent-type-menu button:focus-visible { outline: none; background: #2a5d98; }
+.agent-type-menu strong, .agent-type-menu small { display: block; }
+.agent-type-menu strong { font-size: 13px; }
+.agent-type-menu small { margin-top: 3px; color: var(--muted); font-size: 11px; }
+.agent-connect-description { margin: 2px 2px 18px; color: #eef7ff; font-size: 14px; line-height: 1.6; }
+.agent-connect-label { display: block; margin: 0 2px 7px; color: var(--gold); font-size: 13px; }
+.agent-connect-code { max-width: 100%; margin: 0; overflow: auto; padding: 12px; border: 1px solid #d0e6ff33; border-radius: 7px; background: #071f43; color: #eef7ff; font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre; user-select: text; }
+.agent-connect-actions { display: grid; grid-template-columns: 1fr; gap: 7px; margin-top: 10px; }
+.agent-copy-button { width: 100%; padding: 10px 14px; border: 0; border-radius: 7px; background: var(--gold); color: #5b3b04; font: inherit; font-weight: 800; cursor: pointer; }
+.agent-copy-button:disabled { cursor: default; opacity: .55; }
+.agent-guide-status { display: block; margin: 10px 2px 0; color: var(--muted); font-size: 11px; }
+.agent-connect-note { display: block; margin: 12px 2px 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
 
 .decision-panel[hidden] { display: none; }
 .decision-panel header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid #d0e6ff33; }

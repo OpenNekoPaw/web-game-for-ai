@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
+import { assetsDirectory } from './runtime-paths.js';
 
-const strategiesDirectory = fileURLToPath(new URL('../strategies/ddz/', import.meta.url));
+const strategiesDirectory = join(assetsDirectory, 'strategies', 'ddz');
 const DEFAULT_STRATEGY_ID = 'default';
 
 export function listStrategies() {

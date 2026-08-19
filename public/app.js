@@ -25,6 +25,9 @@ let strategyParticipants = {};
 let strategySnapshotGameId = null;
 let strategyLoading = false;
 let selectedRounds = 1;
+let selectedAgentType = null;
+let agentGuide = null;
+let agentGuideLoading = false;
 
 const $ = (id) => document.getElementById(id);
 const post = (path, data = {}) => fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) }).then(async (response) => ({ response, data: await response.json() }));
@@ -33,6 +36,150 @@ function normalizeSeat(value) { const parsed = Number(value); return [0, 1, 2].i
 function normalizeView(value) { return value === 'global' ? 'global' : 'player'; }
 function syncUrl() { const next = new URL(location.href); next.searchParams.set('seat', seat); if (replayMode) { next.searchParams.set('replay', replayGameId); next.searchParams.delete('game'); next.searchParams.delete('competition'); next.searchParams.delete('control'); } else { if (controlRequested) next.searchParams.set('control', controlledSeat); else next.searchParams.delete('control'); if (gameId) next.searchParams.set('game', gameId); if (competitionId) next.searchParams.set('competition', competitionId); else next.searchParams.delete('competition'); } if (view === 'global') next.searchParams.set('view', 'global'); else next.searchParams.delete('view'); history.replaceState(null, '', next); }
 function showMessage(text, error = false) { clearTimeout(messageTimer); const element = $('message'); element.textContent = text; element.className = `message visible ${error ? 'error' : ''}`; messageTimer = setTimeout(() => { element.className = 'message'; }, 2200); }
+
+function setAgentTypeMenu(open) {
+  const menu = $('agent-type-menu');
+  const button = $('agent-connect');
+  menu.hidden = !open;
+  button.classList.toggle('active', open || !$('agent-panel').hidden);
+  button.setAttribute('aria-expanded', String(open));
+  if (!open) return;
+  const rect = button.getBoundingClientRect();
+  const menuWidth = 218;
+  menu.style.left = `${Math.max(8, Math.min(rect.left, innerWidth - menuWidth - 8))}px`;
+  menu.style.top = `${rect.bottom + 7}px`;
+  menu.querySelector('button')?.focus();
+}
+
+function setAgentPanel(open, type = selectedAgentType) {
+  setAgentTypeMenu(false);
+  if (open) {
+    $('strategy-panel').hidden = true;
+    $('decision-panel').hidden = true;
+    $('review-panel').hidden = true;
+    $('history-panel').hidden = true;
+    selectedAgentType = type || 'mcp';
+    renderAgentConnect(selectedAgentType);
+    loadAgentGuide().then(() => renderAgentConnect(selectedAgentType));
+  }
+  $('agent-panel').hidden = !open;
+  updateSidePanelLayout();
+}
+
+async function loadAgentGuide() {
+  if (agentGuide || agentGuideLoading) return agentGuide;
+  agentGuideLoading = true;
+  try {
+    const response = await fetch('/api/agent-guide');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'agent_guide_failed');
+    agentGuide = data;
+  } catch (error) {
+    showMessage(`Agent 指南加载失败：${errorText(error.message)}`, true);
+  } finally {
+    agentGuideLoading = false;
+  }
+  return agentGuide;
+}
+
+function renderAgentConnect(type) {
+  const content = $('agent-connect-content');
+  const origin = location.origin;
+  const connection = JSON.stringify({ protocol:'agent-game.v1', serverUrl:origin, gameId:gameId || null, seatId:seat }, null, 2);
+  const presets = {
+    codex: {
+      title: 'Codex 接入',
+      description: '安装项目自带插件，一次获得斗地主 Skill 和 MCP 工具。',
+      label: '在项目目录运行',
+      value: `codex plugin marketplace add .\ncodex plugin add ai-h5-game@ai-h5-game-local`,
+      note: `游戏服务：${origin}`
+    },
+    mcp: {
+      title: '通用 MCP 接入',
+      description: '适用于支持 STDIO MCP 的 Agent 客户端。将项目路径替换为本机绝对路径。',
+      label: 'MCP 配置',
+      value: JSON.stringify({ mcpServers:{ 'ai-h5-game':{ command:'node', args:['/绝对路径/ai-h5-game/mcp-server.js'], env:{ DDZ_SERVER_URL:origin } } } }, null, 2),
+      note: '连接后使用 create_game、join_game、observe_game 和 submit_action 等工具。'
+    },
+    http: {
+      title: 'HTTP Agent 接入',
+      description: '适用于脚本、自研 Agent 和不支持 MCP 的模型运行环境。',
+      label: '当前连接信息',
+      value: connection,
+      note: 'Agent 通过 /agent/v1 接口加入座位、观察状态并提交动作。'
+    }
+  };
+  const preset = presets[type] || presets.mcp;
+  $('agent-panel-title').textContent = preset.title;
+  content.innerHTML = '';
+  const description = document.createElement('p');
+  description.className = 'agent-connect-description';
+  description.textContent = preset.description;
+  const label = document.createElement('strong');
+  label.className = 'agent-connect-label';
+  label.textContent = preset.label;
+  const code = document.createElement('pre');
+  code.className = 'agent-connect-code';
+  code.textContent = preset.value;
+  const copy = document.createElement('button');
+  copy.className = 'agent-copy-button';
+  copy.type = 'button';
+  copy.textContent = '复制配置';
+  copy.onclick = async () => {
+    const copied = await copyText(preset.value);
+    showMessage(copied ? '配置已复制' : '复制失败，请手动选择', !copied);
+  };
+  const guideCopy = document.createElement('button');
+  guideCopy.className = 'agent-copy-button agent-guide-button';
+  guideCopy.type = 'button';
+  guideCopy.textContent = agentGuideLoading ? '加载 Skill…' : '复制 Skill';
+  guideCopy.disabled = agentGuideLoading || !agentGuide;
+  guideCopy.onclick = async () => {
+    const copied = await copyText(agentGuide?.markdown || '');
+    showMessage(copied ? 'Skill 已复制' : '复制失败，请手动选择', !copied);
+  };
+  const guideDownload = document.createElement('button');
+  guideDownload.className = 'agent-copy-button agent-guide-button';
+  guideDownload.type = 'button';
+  guideDownload.textContent = '下载 SKILL.md';
+  guideDownload.disabled = agentGuideLoading || !agentGuide;
+  guideDownload.onclick = () => {
+    if (!agentGuide?.markdown) return;
+    const blob = new Blob([agentGuide.markdown], { type:'text/markdown;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = agentGuide.fileName || 'SKILL.md';
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 0);
+  };
+  const guideStatus = document.createElement('small');
+  guideStatus.className = 'agent-guide-status';
+  guideStatus.textContent = agentGuide?.hash ? `Skill hash ${agentGuide.hash.slice(0, 8)}` : 'Skill 由服务端当前文件提供';
+  const note = document.createElement('small');
+  note.className = 'agent-connect-note';
+  note.textContent = preset.note;
+  const actions = document.createElement('div');
+  actions.className = 'agent-connect-actions';
+  actions.append(copy, guideCopy, guideDownload);
+  content.append(description, label, code, actions, guideStatus, note);
+}
+
+async function copyText(value) {
+  try {
+    await navigator.clipboard.writeText(value);
+    return true;
+  } catch {
+    const input = document.createElement('textarea');
+    input.value = value;
+    input.style.position = 'fixed';
+    input.style.opacity = '0';
+    document.body.appendChild(input);
+    input.select();
+    const copied = document.execCommand('copy');
+    input.remove();
+    return copied;
+  }
+}
 
 async function create(rounds = 1) {
   try { const totalRounds = [3, 5, 7].includes(Number(rounds)) ? Number(rounds) : 1; const { response, data } = totalRounds === 1 ? await post('/api/games') : await post('/api/competitions', { totalRounds }); if (!response.ok) throw new Error(data.error || 'create_failed'); gameId = totalRounds === 1 ? data.gameId : data.currentGameId; competitionId = totalRounds === 1 ? null : data.competitionId; selectedRounds = totalRounds; controlActive = false; playerJoinAttempt = null; strategyParticipants = {}; strategySnapshotGameId = null; selected.clear(); syncUrl(); await refresh(); }
@@ -311,6 +458,7 @@ async function setStrategyPanel(open) {
     $('decision-panel').hidden = true;
     $('review-panel').hidden = true;
     $('history-panel').hidden = true;
+    $('agent-panel').hidden = true;
     strategySeat = seat;
   }
   $('strategy-panel').hidden = !open;
@@ -417,7 +565,7 @@ function strategyBody(markdown) {
 }
 
 function setDecisionPanel(open) {
-  if (open) { $('strategy-panel').hidden = true; $('review-panel').hidden = true; $('history-panel').hidden = true; }
+  if (open) { $('strategy-panel').hidden = true; $('review-panel').hidden = true; $('history-panel').hidden = true; $('agent-panel').hidden = true; }
   $('decision-panel').hidden = !open;
   updateSidePanelLayout();
   $('decision-record').classList.toggle('active', open);
@@ -463,7 +611,7 @@ function createCompetitionReviewItem(review) {
 }
 
 function setReviewPanel(open) {
-  if (open) { $('strategy-panel').hidden = true; $('decision-panel').hidden = true; $('history-panel').hidden = true; }
+  if (open) { $('strategy-panel').hidden = true; $('decision-panel').hidden = true; $('history-panel').hidden = true; $('agent-panel').hidden = true; }
   $('review-panel').hidden = !open;
   updateSidePanelLayout();
   $('review-record').classList.toggle('active', open);
@@ -471,12 +619,13 @@ function setReviewPanel(open) {
 }
 
 function updateSidePanelLayout() {
-  const open = !$('strategy-panel').hidden || !$('decision-panel').hidden || !$('review-panel').hidden || !$('history-panel').hidden;
+  const open = !$('strategy-panel').hidden || !$('decision-panel').hidden || !$('review-panel').hidden || !$('history-panel').hidden || !$('agent-panel').hidden;
   $('game-table').classList.toggle('decisions-open', open);
   $('strategy-record').classList.toggle('active', !$('strategy-panel').hidden);
   $('decision-record').classList.toggle('active', !$('decision-panel').hidden);
   $('review-record').classList.toggle('active', !$('review-panel').hidden);
   $('game-record').classList.toggle('active', !$('history-panel').hidden);
+  $('agent-connect').classList.toggle('active', !$('agent-panel').hidden || !$('agent-type-menu').hidden);
   $('strategy-record').setAttribute('aria-expanded', String(!$('strategy-panel').hidden));
   $('decision-record').setAttribute('aria-expanded', String(!$('decision-panel').hidden));
   $('review-record').setAttribute('aria-expanded', String(!$('review-panel').hidden));
@@ -487,6 +636,7 @@ async function setHistoryPanel(open) {
     $('strategy-panel').hidden = true;
     $('decision-panel').hidden = true;
     $('review-panel').hidden = true;
+    $('agent-panel').hidden = true;
   }
   $('history-panel').hidden = !open;
   updateSidePanelLayout();
@@ -670,7 +820,19 @@ function renderAvatar(element, id, label) {
 function readyLabel(id) { return state.readySeats?.includes(id) ? '已就绪' : state.seatControllers?.[id] ? '等待开始' : '等待加入'; }
 function toggle(id, visible) { $(id).hidden = !visible; }
 
-function renderOpponentHand(position, id) { const container = $(`${position}-cards`); const cards = state.hands[id].cards || []; if (view !== 'global' || !cards.length) { container.className = 'opponent-cards cards-back vertical'; container.innerHTML = ''; return; } container.className = `opponent-cards opponent-face ${position}`; container.innerHTML = ''; container.appendChild(createStaticCardGroup(cards, 'opponent-playing-cards')); }
+function renderOpponentHand(position, id) {
+  const container = $(`${position}-cards`);
+  const hand = state.hands[id];
+  const cards = hand.cards || [];
+  container.innerHTML = '';
+  if (view === 'global' && cards.length) {
+    container.className = `opponent-cards opponent-face ${position}`;
+    container.appendChild(createStaticCardGroup(cards, 'opponent-playing-cards'));
+    return;
+  }
+  container.className = `opponent-cards opponent-back-stack ${position}`;
+  if (hand.count > 0) container.appendChild(createCardBackGroup(hand.count));
+}
 function renderSelfHand(cards) { renderHand(cards); }
 
 function renderBottomCards(cards) {
@@ -680,6 +842,17 @@ function renderBottomCards(cards) {
 }
 
 function createStaticCardGroup(cards, className = '') { const wrapper = document.createElement('div'); wrapper.className = `playingCards ${className}`.trim(); const list = document.createElement('ul'); list.className = 'hand'; cards.forEach((card) => { const item = document.createElement('li'); const element = document.createElement('span'); const face = cardFace(card); element.className = `card ${face.className}`; element.innerHTML = `<span class="rank">${face.rank}</span><span class="suit">${face.suit}</span>`; item.appendChild(element); list.appendChild(item); }); wrapper.appendChild(list); return wrapper; }
+
+function createCardBackGroup(count) {
+  const wrapper = document.createElement('div'); wrapper.className = 'playingCards opponent-card-backs'; wrapper.setAttribute('aria-label', `${count} 张未公开手牌`);
+  const list = document.createElement('ul'); list.className = 'hand';
+  for (let index = 0; index < count; index++) {
+    const item = document.createElement('li');
+    const card = document.createElement('span'); card.className = 'card card-back'; card.setAttribute('aria-hidden', 'true');
+    item.appendChild(card); list.appendChild(item);
+  }
+  wrapper.appendChild(list); return wrapper;
+}
 
 function renderHand(cards) {
   const hand = $('my-hand'); hand.innerHTML = '';
@@ -704,17 +877,18 @@ function renderTablePlays() {
     });
     return;
   }
-  const lastActor = state.winner !== null
-    ? state.lastPlay?.seatId
-    : Number.isInteger(state.current) ? (state.current + 2) % 3 : null;
-  if (!Number.isInteger(lastActor)) return;
-  const slot = `${playerPosition(lastActor)}-play`;
-  if (state.tablePasses?.[lastActor]) {
-    const hint = document.createElement('span'); hint.className = 'pass-hint'; hint.textContent = '不要'; $(slot).appendChild(hint);
-    return;
-  }
-  const cards = state.tablePlays?.[lastActor];
-  if (cards?.length) $(slot).appendChild(createStaticCardGroup(cards, 'compact'));
+  const displayedPlaySeat = Number.isInteger(state.lastPlay?.seatId)
+    ? state.lastPlay.seatId
+    : state.tablePlays?.findIndex((cards) => cards?.length);
+  [0, 1, 2].forEach((seatId) => {
+    const slot = `${playerPosition(seatId)}-play`;
+    if (state.tablePasses?.[seatId]) {
+      const hint = document.createElement('span'); hint.className = 'pass-hint'; hint.textContent = '不要'; $(slot).appendChild(hint);
+      return;
+    }
+    const cards = seatId === displayedPlaySeat ? state.tablePlays?.[seatId] : null;
+    if (cards?.length) $(slot).appendChild(createStaticCardGroup(cards, 'compact'));
+  });
 }
 
 function cardId(card) { return typeof card === 'string' ? card : card?.id; }
@@ -766,6 +940,8 @@ async function createReplayRematch() {
 $('new-game').onclick = () => { if (replayMode) location.href = replayReturn?.startsWith('/?') ? replayReturn : '/?seat=0'; };
 $('rematch-game').onclick = createReplayRematch;
 $('start-game').onclick = () => state?.phase === 'over' ? create(selectedRounds) : start();
+$('agent-connect').onclick = () => setAgentTypeMenu($('agent-type-menu').hidden);
+$('close-agent-panel').onclick = () => setAgentPanel(false);
 $('game-record').onclick = openGameRecord;
 $('strategy-record').onclick = () => setStrategyPanel($('strategy-panel').hidden);
 $('close-strategies').onclick = () => setStrategyPanel(false);
@@ -782,10 +958,18 @@ $('play').onclick = () => selected.size ? action({ type:'play', cards:[...select
 document.querySelectorAll('.perspectives button').forEach((button) => button.onclick = () => switchSeat(button.dataset.seat));
 document.querySelectorAll('[data-rounds]').forEach((button) => button.onclick = () => { const rounds = Number(button.dataset.rounds); if (rounds !== selectedRounds) create(rounds); });
 document.querySelectorAll('[data-strategy-seat]').forEach((button) => button.onclick = () => { strategySeat = normalizeSeat(button.dataset.strategySeat); renderStrategyDocument(); });
+document.querySelectorAll('[data-agent-type]').forEach((button) => button.onclick = () => setAgentPanel(true, button.dataset.agentType));
 $('replay-prev').onclick = () => stepReplay(-1);
 $('replay-toggle').onclick = toggleReplay;
 $('replay-next').onclick = () => stepReplay(1);
 $('replay-progress').oninput = (event) => showReplayFrame(event.target.value);
+document.addEventListener('click', (event) => {
+  if (!$('agent-type-menu').hidden && !event.target.closest('#agent-type-menu') && !event.target.closest('#agent-connect')) setAgentTypeMenu(false);
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !$('agent-type-menu').hidden) { setAgentTypeMenu(false); $('agent-connect').focus(); }
+});
+window.addEventListener('resize', () => setAgentTypeMenu(false));
 
 if (replayMode) loadReplay(); else if (gameId) refresh(); else create();
 setInterval(() => { if (!replayMode) refresh(); }, 1200);

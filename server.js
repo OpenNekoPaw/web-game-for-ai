@@ -1,11 +1,11 @@
 import http from 'node:http';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { createCompetition, createMatch, createRematch, getMatch, getMatchStrategies, getReplay, getStrategies, joinMatch, joinPlayerMatch, observeCompetition, observeMatch, runBot, startMatch, submitCompetitionReview, submitMatchAction, submitMatchReview, tickMatches } from './game/store.js';
 import { listReplays } from './game/replay-store.js';
+import { assetsDirectory } from './game/runtime-paths.js';
 
-const root = fileURLToPath(new URL('.', import.meta.url));
 const mime = { '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.css':'text/css; charset=utf-8' };
 const json = (res, code, body) => { res.writeHead(code, {'content-type':'application/json; charset=utf-8','access-control-allow-origin':'*'}); res.end(JSON.stringify(body)); };
 const body = async (req) => { let data=''; for await (const chunk of req) data += chunk; return data ? JSON.parse(data) : {}; };
@@ -13,8 +13,13 @@ const body = async (req) => { let data=''; for await (const chunk of req) data +
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
-    if (req.method === 'GET' && url.pathname === '/') { const data = await readFile(join(root, 'public/index.html')); res.writeHead(200, {'content-type': mime['.html']}); return res.end(data); }
-    if (req.method === 'GET' && url.pathname.startsWith('/public/')) { const file = join(root, url.pathname); const data = await readFile(file); res.writeHead(200, {'content-type': mime[extname(file)] || 'application/octet-stream'}); return res.end(data); }
+    if (req.method === 'GET' && url.pathname === '/') { const data = await readFile(join(assetsDirectory, 'public/index.html')); res.writeHead(200, {'content-type': mime['.html']}); return res.end(data); }
+    if (req.method === 'GET' && url.pathname.startsWith('/public/')) { const file = join(assetsDirectory, url.pathname); const data = await readFile(file); res.writeHead(200, {'content-type': mime[extname(file)] || 'application/octet-stream'}); return res.end(data); }
+    if (req.method === 'GET' && url.pathname === '/api/agent-guide') {
+      const markdown = await readFile(join(assetsDirectory, '.agents', 'skills', 'play-doudizhu', 'SKILL.md'), 'utf8');
+      const hash = createHash('sha256').update(markdown).digest('hex');
+      return json(res, 200, { protocol:'agent-game.v1', format:'agentskills', fileName:'SKILL.md', hash, markdown });
+    }
     if (req.method === 'GET' && url.pathname === '/agent/v1/strategies') return json(res, 200, { protocol:'agent-game.v1', ...getStrategies() });
     if (req.method === 'GET' && url.pathname === '/api/replays') return json(res, 200, listReplays({ limit:url.searchParams.get('limit'), offset:url.searchParams.get('offset'), status:url.searchParams.get('status') }));
     if (req.method === 'POST' && (url.pathname === '/api/competitions' || url.pathname === '/agent/v1/competitions')) return json(res, 201, createCompetition(await body(req)));

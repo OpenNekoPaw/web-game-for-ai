@@ -5,6 +5,22 @@
   gap: 14px;
 }
 
+.game-brand .agent-connect-toggle {
+  padding: 9px 16px;
+  border: 0;
+  border-radius: 8px;
+  background: #f4f9ff;
+  color: #19487f;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.game-brand .agent-connect-toggle.active {
+  background: var(--gold);
+  color: #5b3b04;
+}
+
 .score-info {
   flex: none;
   padding: 7px 11px;
@@ -22,7 +38,8 @@
 
 @media(max-width: 760px) {
   .game-header { gap: 6px; }
-  .game-brand { gap: 0; }
+  .game-brand { gap: 6px; }
+  .game-brand .agent-connect-toggle { padding: 7px 10px; font-size: 11px; }
   .score-info { padding: 6px 8px; font-size: 11px; }
   .game-info { width: auto; flex: 1; }
 }

@@ -1,8 +1,7 @@
 import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { recordsDirectory } from './runtime-paths.js';
 
-const recordsDirectory = fileURLToPath(new URL('../records/', import.meta.url));
 const records = new Map();
 const persistenceEnabled = process.env.REPLAY_PERSISTENCE !== 'memory';
 
