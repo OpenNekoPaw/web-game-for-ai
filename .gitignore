@@ -1,1 +1,30 @@
+# Dependencies
+node_modules/
+
+# Match data and runtime state
 records/
+*.log
+*.pid
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# Test and build output
+coverage/
+.nyc_output/
+dist/
+build/
+.cache/
+.tmp/
+tmp/
+
+# Editor and operating-system files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
