@@ -169,7 +169,9 @@ function setConnectionError(error) { showMessage(`无法连接服务：${error.m
 function renderCountdown() {
   const element = $('countdown');
   if (!element) return;
-  if (replayMode || !state || state.winner !== null || !state.turnDeadlineAt) { element.textContent = ''; element.classList.remove('urgent'); return; }
+  const visible = !replayMode && Boolean(state) && state.phase !== 'waiting' && state.winner === null && Boolean(state.turnDeadlineAt);
+  element.hidden = !visible;
+  if (!visible) { element.textContent = ''; element.classList.remove('urgent'); return; }
   const remainingMs = Math.max(0, state.turnDeadlineAt - (Date.now() + serverClockOffsetMs));
   const totalSeconds = Math.ceil(remainingMs / 1000);
   const minutes = Math.floor(totalSeconds / 60);
