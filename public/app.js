@@ -3,9 +3,10 @@ const replayGameId = params.get('replay');
 const replayMode = Boolean(replayGameId);
 const replayReturn = params.get('return');
 let gameId = params.get('game');
+let competitionId = params.get('competition');
 let seat = normalizeSeat(params.get('seat'));
 let controlledSeat = normalizeSeat(params.get('control') ?? params.get('seat'));
-let controlRequested = params.has('control') || !gameId;
+let controlRequested = params.has('control');
 let controlActive = false;
 let playerJoinAttempt = null;
 let view = normalizeView(params.get('view'));
@@ -18,33 +19,39 @@ let botBusy = false;
 let refreshing = false;
 let messageTimer = null;
 let serverClockOffsetMs = 0;
+let strategySeat = seat;
+let strategyParticipants = {};
+let strategySnapshotGameId = null;
+let strategyLoading = false;
+let selectedRounds = 1;
 
 const $ = (id) => document.getElementById(id);
 const post = (path, data = {}) => fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) }).then(async (response) => ({ response, data: await response.json() }));
 
 function normalizeSeat(value) { const parsed = Number(value); return [0, 1, 2].includes(parsed) ? parsed : 0; }
 function normalizeView(value) { return value === 'global' ? 'global' : 'player'; }
-function syncUrl() { const next = new URL(location.href); next.searchParams.set('seat', seat); if (replayMode) { next.searchParams.set('replay', replayGameId); next.searchParams.delete('game'); next.searchParams.delete('control'); } else { if (controlRequested) next.searchParams.set('control', controlledSeat); else next.searchParams.delete('control'); if (gameId) next.searchParams.set('game', gameId); } if (view === 'global') next.searchParams.set('view', 'global'); else next.searchParams.delete('view'); history.replaceState(null, '', next); }
+function syncUrl() { const next = new URL(location.href); next.searchParams.set('seat', seat); if (replayMode) { next.searchParams.set('replay', replayGameId); next.searchParams.delete('game'); next.searchParams.delete('competition'); next.searchParams.delete('control'); } else { if (controlRequested) next.searchParams.set('control', controlledSeat); else next.searchParams.delete('control'); if (gameId) next.searchParams.set('game', gameId); if (competitionId) next.searchParams.set('competition', competitionId); else next.searchParams.delete('competition'); } if (view === 'global') next.searchParams.set('view', 'global'); else next.searchParams.delete('view'); history.replaceState(null, '', next); }
 function showMessage(text, error = false) { clearTimeout(messageTimer); const element = $('message'); element.textContent = text; element.className = `message visible ${error ? 'error' : ''}`; messageTimer = setTimeout(() => { element.className = 'message'; }, 2200); }
 
-async function create() {
-  try { const { response, data } = await post('/api/games'); if (!response.ok) throw new Error(data.error || 'create_failed'); gameId = data.gameId; controlRequested = true; controlActive = false; playerJoinAttempt = null; selected.clear(); syncUrl(); await refresh(); }
+async function create(rounds = 1) {
+  try { const totalRounds = [3, 5, 7].includes(Number(rounds)) ? Number(rounds) : 1; const { response, data } = totalRounds === 1 ? await post('/api/games') : await post('/api/competitions', { totalRounds }); if (!response.ok) throw new Error(data.error || 'create_failed'); gameId = totalRounds === 1 ? data.gameId : data.currentGameId; competitionId = totalRounds === 1 ? null : data.competitionId; selectedRounds = totalRounds; controlActive = false; playerJoinAttempt = null; strategyParticipants = {}; strategySnapshotGameId = null; selected.clear(); syncUrl(); await refresh(); }
   catch (error) { setConnectionError(error); }
 }
 
 async function ensurePlayerJoined() {
   if (replayMode || !controlRequested || !gameId || playerJoinAttempt === gameId) return;
   playerJoinAttempt = gameId;
-  const playerId = localPlayerId(gameId, controlledSeat);
-  const { response, data } = await post(`/api/games/${gameId}/join`, { seatId: controlledSeat, playerId });
+  const playerId = localPlayerId(competitionId || gameId, controlledSeat);
+  const displayName = String(params.get('name') || `玩家 ${['A', 'B', 'C'][controlledSeat]}`).trim().slice(0, 40);
+  const { response, data } = await post(`/api/games/${gameId}/join`, { seatId: controlledSeat, playerId, displayName });
   if (response.ok) { controlActive = true; return; }
   controlActive = false;
   if (data.error === 'seat_occupied') { showMessage('该座位已由其他玩家或 Agent 占用，当前为观战模式', true); return; }
   throw new Error(data.error || 'join_failed');
 }
 
-function localPlayerId(currentGameId, seatId) {
-  const key = `ddz-player:${currentGameId}:${seatId}`;
+function localPlayerId(sessionId, seatId) {
+  const key = `ddz-player:${sessionId}:${seatId}`;
   let value = localStorage.getItem(key) || sessionStorage.getItem(key);
   if (!value) value = `h5-${crypto.randomUUID()}`;
   localStorage.setItem(key, value);
@@ -67,6 +74,8 @@ async function loadReplay() {
     if (!Array.isArray(data.frames) || !data.frames.length) throw new Error('empty_replay');
     replay = data;
     gameId = data.gameId;
+    strategyParticipants = data.participants || {};
+    strategySnapshotGameId = data.gameId;
     $('replay-controls').hidden = false;
     $('new-game').hidden = false;
     $('new-game').textContent = '退出回放';
@@ -143,7 +152,13 @@ async function refresh() {
     const response = await fetch(stateUrl);
     const data = await response.json();
     if (!response.ok) { if (data.error === 'game_not_found') return create(); throw new Error(data.error || 'state_failed'); }
-    state = data; serverClockOffsetMs = Number(data.serverNow || Date.now()) - Date.now(); render();
+    if (data.competition?.competitionId) competitionId = data.competition.competitionId;
+    if (data.competition?.currentGameId && data.competition.currentGameId !== gameId) {
+      gameId = data.competition.currentGameId; controlActive = false; playerJoinAttempt = null; strategyParticipants = {}; strategySnapshotGameId = null; selected.clear(); syncUrl(); refreshing = false; return refresh();
+    }
+    state = data; serverClockOffsetMs = Number(data.serverNow || Date.now()) - Date.now(); syncUrl();
+    if (!$('strategy-panel').hidden && view === 'global') await loadStrategyDetails(state.phase === 'waiting');
+    render();
   } catch (error) { setConnectionError(error); }
   finally { refreshing = false; }
   await advanceBots();
@@ -164,7 +179,7 @@ function renderCountdown() {
 }
 
 async function advanceBots() {
-  if (replayMode || !state || state.phase === 'waiting' || state.winner !== null || state.current === controlledSeat || botBusy) return;
+  if (replayMode || !state || state.phase === 'waiting' || state.winner !== null || (controlActive && state.current === controlledSeat) || botBusy) return;
   if (state.seatControllers && Object.prototype.hasOwnProperty.call(state.seatControllers, state.current)) return;
   botBusy = true;
   try { const { response, data } = await post(`/api/games/${gameId}/bot`); if (!response.ok && data.error !== 'game_over') throw new Error(data.error); }
@@ -175,7 +190,7 @@ async function advanceBots() {
 
 function render() {
   const labels = ['A', 'B', 'C'];
-  const roles = (id) => state.phase === 'waiting' ? '等待' : state.landlord === id ? '地主' : '农民';
+  const roles = (id) => state.phase === 'waiting' ? '等待' : state.phase === 'bid' ? '竞叫' : state.landlord === id ? '地主' : '农民';
   const controllers = (id) => controllerLabel(id);
   const left = (seat + 2) % 3;
   const right = (seat + 1) % 3;
@@ -184,11 +199,12 @@ function render() {
   renderCompetition();
   setPlayer('left', left, labels, roles, controllers);
   setPlayer('right', right, labels, roles, controllers);
-  $('self-avatar').textContent = labels[seat]; $('self-name').textContent = `${roles(seat)} ${labels[seat]} · ${controllers(seat)}`; $('self-count').textContent = state.phase === 'waiting' ? readyLabel(seat) : `${state.hands[seat].count} 张`;
+  $('self-avatar').textContent = labels[seat]; $('self-name').textContent = `${roles(seat)} ${labels[seat]} · ${controllers(seat)}`; $('self-name').title = state.seatControllers?.[seat]?.id || ''; $('self-count').textContent = state.phase === 'waiting' ? readyLabel(seat) : `${state.hands[seat].count} 张`;
   renderSelfHand(state.hands[seat].cards);
   renderBottomCards(state.bottom);
   renderTablePlays();
   renderLifecycle();
+  renderStrategies();
   renderDecisions();
   renderReviews();
   document.querySelectorAll('.perspectives button').forEach((button) => button.classList.toggle('active', Number(button.dataset.seat) === seat));
@@ -200,18 +216,24 @@ function render() {
 }
 
 function renderCompetition() {
-  const element = $('competition-info');
+  const roundElement = $('competition-info');
+  const scoreElement = $('score-info');
   const competition = state?.competition;
-  if (!element || !competition) { if (element) element.hidden = true; return; }
+  if (!competition) {
+    if (roundElement) roundElement.hidden = true;
+    if (scoreElement) scoreElement.hidden = true;
+    return;
+  }
   const scores = (competition.scores || []).map((score, seatId) => `${['A', 'B', 'C'][seatId]} ${score >= 0 ? '+' : ''}${score}`).join(' · ');
-  element.hidden = false;
-  element.textContent = `第 ${competition.currentRound}/${competition.totalRounds} 局 · ${scores}`;
+  roundElement.hidden = false;
+  roundElement.textContent = `第 ${competition.currentRound}/${competition.totalRounds} 局`;
+  scoreElement.hidden = false;
+  scoreElement.textContent = scores;
 }
 
 function renderDecisions() {
   const available = replayMode || view === 'global';
   const button = $('decision-record');
-  const panel = $('decision-panel');
   button.hidden = !available;
   if (!available) setDecisionPanel(false);
   const decisions = state.decisions || [];
@@ -228,8 +250,156 @@ function renderDecisions() {
   [...decisions].reverse().forEach((decision) => list.appendChild(createDecisionItem(decision)));
 }
 
+function renderStrategies() {
+  const available = replayMode || view === 'global';
+  const button = $('strategy-record');
+  button.hidden = !available;
+  if (!available) setStrategyPanel(false);
+  if (!$('strategy-panel').hidden) renderStrategyDocument();
+}
+
+function controllerForSeat(seatId) {
+  return strategyParticipants?.[seatId] || state.seatControllers?.[seatId] || replay?.participants?.[seatId] || null;
+}
+
+function strategyForSeat(seatId) {
+  return strategyParticipants?.[seatId]?.strategy || state.strategyAssignments?.[seatId] || replay?.participants?.[seatId]?.strategy || null;
+}
+
+async function loadStrategyDetails(force = false) {
+  if (replayMode) {
+    strategyParticipants = replay?.participants || {};
+    strategySnapshotGameId = gameId;
+    return;
+  }
+  if (!gameId || strategyLoading || (!force && strategySnapshotGameId === gameId)) return;
+  strategyLoading = true;
+  renderStrategyDocument();
+  try {
+    const response = await fetch(`/api/games/${encodeURIComponent(gameId)}/strategies?view=global`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'strategy_load_failed');
+    strategyParticipants = data.participants || {};
+    strategySnapshotGameId = data.gameId;
+  } catch (error) {
+    showMessage(`策略加载失败：${errorText(error.message)}`, true);
+  } finally {
+    strategyLoading = false;
+  }
+}
+
+async function setStrategyPanel(open) {
+  if (open) {
+    $('decision-panel').hidden = true;
+    $('review-panel').hidden = true;
+    $('history-panel').hidden = true;
+    strategySeat = seat;
+  }
+  $('strategy-panel').hidden = !open;
+  updateSidePanelLayout();
+  $('strategy-record').classList.toggle('active', open);
+  $('strategy-record').setAttribute('aria-expanded', String(open));
+  if (!open) return;
+  renderStrategyDocument();
+  await loadStrategyDetails(true);
+  renderStrategyDocument();
+}
+
+function renderStrategyDocument() {
+  const content = $('strategy-content');
+  document.querySelectorAll('[data-strategy-seat]').forEach((button) => {
+    const active = Number(button.dataset.strategySeat) === strategySeat;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+  content.innerHTML = '';
+  if (strategyLoading) {
+    const loading = document.createElement('p');
+    loading.className = 'decision-empty';
+    loading.textContent = '正在加载本局策略…';
+    content.appendChild(loading);
+    return;
+  }
+  const participant = controllerForSeat(strategySeat);
+  const strategy = strategyForSeat(strategySeat);
+  const label = ['A', 'B', 'C'][strategySeat];
+  const heading = document.createElement('h2');
+  heading.className = 'strategy-heading';
+  heading.textContent = `${label} · ${participant?.displayName || participant?.id || (participant?.type === 'player' ? '玩家' : participant?.type === 'agent' ? 'Agent' : '未接入')}`;
+  heading.title = participant?.id || '';
+  content.appendChild(heading);
+  const context = document.createElement('span');
+  context.className = 'strategy-context';
+  context.textContent = strategyRoleLabel(strategySeat);
+  content.appendChild(context);
+  if (!strategy) {
+    const empty = document.createElement('p');
+    empty.className = 'decision-empty';
+    empty.textContent = participant?.type === 'player' ? '人工玩家未绑定 Agent 策略' : participant?.type === 'agent' ? '本局策略快照缺失' : '该席位尚未接入';
+    content.appendChild(empty);
+    return;
+  }
+  const metadata = document.createElement('small');
+  metadata.className = 'strategy-metadata';
+  metadata.textContent = `${strategy.name} · ${strategy.id}${strategy.updatedAt ? ` · ${new Date(strategy.updatedAt).toLocaleString('zh-CN')}` : ''}${strategy.hash ? ` · ${strategy.hash.slice(0, 8)}` : ''}`;
+  content.appendChild(metadata);
+  if (!strategy.markdown) {
+    const unavailable = document.createElement('p');
+    unavailable.className = 'decision-empty';
+    unavailable.textContent = '完整策略正文未加载';
+    content.appendChild(unavailable);
+    return;
+  }
+  renderStrategyMarkdown(content, strategy.markdown);
+}
+
+function strategyRoleLabel(seatId) {
+  if (!Number.isInteger(state?.landlord) || !['play', 'over'].includes(state.phase)) return '当前身份：待定';
+  if (seatId === state.landlord) return '当前身份：地主';
+  return seatId === (state.landlord + 2) % 3 ? '当前身份：地主上家' : '当前身份：地主下家';
+}
+
+function renderStrategyMarkdown(container, markdown) {
+  const documentElement = document.createElement('section');
+  documentElement.className = 'strategy-document';
+  const lines = strategyBody(markdown).split('\n');
+  let list = null;
+  lines.forEach((rawLine) => {
+    const line = rawLine.trim();
+    if (!line) { list = null; return; }
+    const heading = line.match(/^(#{1,4})\s+(.+)$/);
+    if (heading) {
+      list = null;
+      const level = heading[1].length === 1 ? 'h2' : heading[1].length === 2 ? 'h3' : 'h4';
+      const element = document.createElement(level);
+      element.textContent = heading[2];
+      documentElement.appendChild(element);
+      return;
+    }
+    if (line.startsWith('- ')) {
+      if (!list) { list = document.createElement('ul'); documentElement.appendChild(list); }
+      const item = document.createElement('li');
+      item.textContent = line.slice(2);
+      list.appendChild(item);
+      return;
+    }
+    list = null;
+    const paragraph = document.createElement('p');
+    paragraph.textContent = line;
+    documentElement.appendChild(paragraph);
+  });
+  container.appendChild(documentElement);
+}
+
+function strategyBody(markdown) {
+  const value = String(markdown || '').replace(/\r/g, '');
+  if (!value.startsWith('---\n')) return value.trim();
+  const end = value.indexOf('\n---\n', 4);
+  return end === -1 ? value.trim() : value.slice(end + 5).trim();
+}
+
 function setDecisionPanel(open) {
-  if (open) { $('review-panel').hidden = true; $('history-panel').hidden = true; }
+  if (open) { $('strategy-panel').hidden = true; $('review-panel').hidden = true; $('history-panel').hidden = true; }
   $('decision-panel').hidden = !open;
   updateSidePanelLayout();
   $('decision-record').classList.toggle('active', open);
@@ -275,7 +445,7 @@ function createCompetitionReviewItem(review) {
 }
 
 function setReviewPanel(open) {
-  if (open) { $('decision-panel').hidden = true; $('history-panel').hidden = true; }
+  if (open) { $('strategy-panel').hidden = true; $('decision-panel').hidden = true; $('history-panel').hidden = true; }
   $('review-panel').hidden = !open;
   updateSidePanelLayout();
   $('review-record').classList.toggle('active', open);
@@ -283,15 +453,20 @@ function setReviewPanel(open) {
 }
 
 function updateSidePanelLayout() {
-  const open = !$('decision-panel').hidden || !$('review-panel').hidden || !$('history-panel').hidden;
+  const open = !$('strategy-panel').hidden || !$('decision-panel').hidden || !$('review-panel').hidden || !$('history-panel').hidden;
   $('game-table').classList.toggle('decisions-open', open);
+  $('strategy-record').classList.toggle('active', !$('strategy-panel').hidden);
   $('decision-record').classList.toggle('active', !$('decision-panel').hidden);
   $('review-record').classList.toggle('active', !$('review-panel').hidden);
   $('game-record').classList.toggle('active', !$('history-panel').hidden);
+  $('strategy-record').setAttribute('aria-expanded', String(!$('strategy-panel').hidden));
+  $('decision-record').setAttribute('aria-expanded', String(!$('decision-panel').hidden));
+  $('review-record').setAttribute('aria-expanded', String(!$('review-panel').hidden));
 }
 
 async function setHistoryPanel(open) {
   if (open) {
+    $('strategy-panel').hidden = true;
     $('decision-panel').hidden = true;
     $('review-panel').hidden = true;
   }
@@ -328,11 +503,32 @@ function createHistoryItem(record) {
   const participants = labels.map((label, seatId) => {
     const participant = record.participants?.[seatId];
     if (!participant) return `${label} 空位`;
-    return `${label} ${participant.type === 'agent' ? 'Agent' : '玩家'}`;
-  }).join(' · ');
-  const status = record.phase === 'over' ? record.winner === 'landlord' ? '地主获胜' : '农民获胜' : record.phase === 'waiting' ? '等待开始' : '进行中';
+    if (participant.type === 'agent') return `${label} ${participant.displayName || participant.id || 'Agent'} · ${participant.strategy?.name || '默认策略'}`;
+    return `${label} ${participant.displayName || participant.id || '玩家'} · 人工玩家`;
+  });
+  const status = record.phase === 'over'
+    ? record.winner === 'landlord' ? '地主获胜' : record.winner === 'farmers' ? '农民获胜' : '对局中断'
+    : record.phase === 'waiting' ? '等待开始' : '进行中';
   const competition = record.competition ? ` · 第 ${record.competition.roundNumber}/${record.competition.totalRounds} 局` : '';
-  item.innerHTML = `<strong>${record.gameId === gameId ? '<span class="current-record">当前</span>' : ''}${status}${competition}</strong><span>${formatRecordTime(record.createdAt)} · ${record.frameCount} 帧</span><small>${participants}</small>`;
+  const multiplier = record.settlement?.multiplier > 1 ? ` · ×${record.settlement.multiplier}` : '';
+  const heading = document.createElement('strong');
+  if (record.gameId === gameId) {
+    const current = document.createElement('span');
+    current.className = 'current-record';
+    current.textContent = '当前';
+    heading.appendChild(current);
+  }
+  heading.append(`${status}${competition}${multiplier}`);
+  const metadata = document.createElement('span');
+  metadata.textContent = `${formatRecordTime(record.createdAt)} · ${record.frameCount} 帧`;
+  const participantList = document.createElement('small');
+  participants.forEach((participant) => {
+    const line = document.createElement('span');
+    line.className = 'history-participant';
+    line.textContent = participant;
+    participantList.appendChild(line);
+  });
+  item.append(heading, metadata, participantList);
   item.onclick = () => openReplay(record.gameId);
   return item;
 }
@@ -379,6 +575,7 @@ function createDecisionItem(decision) {
   const details = [];
   if (decision.intent) details.push(`意图：${decision.intent}`);
   if (decision.confidence !== undefined) details.push(`置信度：${Math.round(decision.confidence * 100)}%`);
+  if (decision.gameId && decision.gameId !== state.gameId) details.push(`记录异常：${decision.gameId}`);
   if (details.length) {
     const meta = document.createElement('small');
     meta.textContent = details.join(' · ');
@@ -390,9 +587,14 @@ function createDecisionItem(decision) {
 function renderLifecycle() {
   const container = $('game-lifecycle');
   const button = $('start-game');
+  const setup = $('match-setup');
   if (replayMode || !['waiting', 'over'].includes(state.phase)) { container.hidden = true; return; }
   container.hidden = false;
   if (state.phase === 'waiting') {
+    selectedRounds = state.competition?.totalRounds || 1;
+    setup.hidden = false;
+    const canConfigure = Object.keys(state.seatControllers || {}).length === 0;
+    document.querySelectorAll('[data-rounds]').forEach((roundButton) => { const rounds = Number(roundButton.dataset.rounds); roundButton.classList.toggle('active', rounds === selectedRounds); roundButton.disabled = !canConfigure; });
     const readyCount = state.readySeats?.length || 0;
     const selfReady = state.readySeats?.includes(controlledSeat);
     $('game-status').textContent = selfReady ? '等待其他玩家' : '等待玩家准备';
@@ -402,22 +604,41 @@ function renderLifecycle() {
     button.disabled = false;
     return;
   }
+  setup.hidden = true;
+  const competitionStatus = state.competition?.status;
+  if (competitionStatus === 'reviewing_round' || competitionStatus === 'reviewing_competition') {
+    button.hidden = true;
+    $('game-status').textContent = competitionStatus === 'reviewing_round' ? '本局已结束' : '比赛已完成';
+    $('ready-status').textContent = competitionStatus === 'reviewing_round' ? '等待三席提交本局复盘' : '等待三席提交比赛总结';
+    return;
+  }
   button.hidden = false;
-  $('game-status').textContent = state.winner === 'landlord' ? '地主获胜' : '农民获胜';
-  $('ready-status').textContent = '本局已结束，可查看记录或开始新局';
-  button.textContent = '新一局';
+  $('game-status').textContent = state.competition ? '比赛结束' : state.winner === 'landlord' ? '地主获胜' : state.winner === 'farmers' ? '农民获胜' : '对局中断';
+  const settlementText = formatSettlement(state.settlement);
+  $('ready-status').textContent = state.competition
+    ? `总比分 ${(state.competition.scores || []).map((score, id) => `${['A', 'B', 'C'][id]} ${score >= 0 ? '+' : ''}${score}`).join(' · ')}${settlementText ? ` · ${settlementText}` : ''}`
+    : settlementText || '本局已结束，可查看记录或开始新局';
+  button.textContent = state.competition ? '新比赛' : '新一局';
   button.disabled = false;
 }
 
+function formatSettlement(settlement) {
+  if (!settlement || !Number.isFinite(Number(settlement.multiplier))) return '';
+  const labels = { bomb: '炸弹', rocket: '火箭', spring: '春天', 'anti-spring': '反春' };
+  const reasons = [...new Set((settlement.multiplierReasons || []).map((reason) => labels[reason] || reason))];
+  return `本局 ×${settlement.multiplier}${reasons.length ? `（${reasons.join('、')}）` : ''}`;
+}
+
 function controllerLabel(id) {
-  const type = state.seatControllers?.[id]?.type;
-  if (type === 'agent') return 'Agent';
-  if (type === 'player') return '玩家';
+  const controller = state.seatControllers?.[id];
+  if (controller?.displayName) return controller.displayName;
+  if (controller?.type === 'agent') return controller.id || 'Agent';
+  if (controller?.type === 'player') return '玩家';
   if (state.phase === 'waiting') return '待接入';
   if (replayMode) return 'Bot';
-  return id === controlledSeat ? '玩家' : 'Bot';
+  return controlActive && id === controlledSeat ? '玩家' : 'Bot';
 }
-function setPlayer(position, id, labels, roles, controllers) { $(`${position}-avatar`).textContent = labels[id]; $(`${position}-name`).textContent = `${roles(id)} ${labels[id]} · ${controllers(id)}`; $(`${position}-count`).textContent = state.phase === 'waiting' ? readyLabel(id) : `${state.hands[id].count} 张`; renderOpponentHand(position, id); }
+function setPlayer(position, id, labels, roles, controllers) { $(`${position}-avatar`).textContent = labels[id]; $(`${position}-name`).textContent = `${roles(id)} ${labels[id]} · ${controllers(id)}`; $(`${position}-name`).title = state.seatControllers?.[id]?.id || ''; $(`${position}-count`).textContent = state.phase === 'waiting' ? readyLabel(id) : `${state.hands[id].count} 张`; renderOpponentHand(position, id); }
 function readyLabel(id) { return state.readySeats?.includes(id) ? '已就绪' : state.seatControllers?.[id] ? '等待开始' : '等待加入'; }
 function toggle(id, visible) { $(id).hidden = !visible; }
 
@@ -442,6 +663,19 @@ function renderHand(cards) {
 
 function renderTablePlays() {
   ['left-play','right-play','self-play'].forEach((id) => { $(id).innerHTML = ''; });
+  const showBidProcess = state.phase === 'bid' && ['call', 'rob'].includes(state.bidStage);
+  if (showBidProcess && state.bidHistory?.length) {
+    const bidsBySeat = new Map();
+    (state.bidHistory || []).forEach((entry) => bidsBySeat.set(entry.seatId, [...(bidsBySeat.get(entry.seatId) || []), entry]));
+    bidsBySeat.forEach((entries, seatId) => {
+      const slot = seatId === seat ? 'self-play' : seatId === (seat + 2) % 3 ? 'left-play' : 'right-play';
+      const hint = document.createElement('span');
+      hint.className = `bid-hint ${entries.at(-1).value ? 'accepted' : 'declined'}`;
+      hint.textContent = entries.map((entry) => entry.stage === 'rob' ? entry.value ? '抢地主' : '不抢' : entry.value ? '叫地主' : '不叫').join(' → ');
+      $(slot).appendChild(hint);
+    });
+    return;
+  }
   const tablePlays = state.tablePlays || [null, null, null];
   tablePlays.forEach((cards, seatId) => {
     if (!cards?.length) return;
@@ -479,8 +713,10 @@ function openReplay(targetGameId) {
 function openGameRecord() { setHistoryPanel($('history-panel').hidden); }
 
 $('new-game').onclick = () => { if (replayMode) location.href = replayReturn?.startsWith('/?') ? replayReturn : '/?seat=0'; };
-$('start-game').onclick = () => state?.phase === 'over' ? create() : start();
+$('start-game').onclick = () => state?.phase === 'over' ? create(selectedRounds) : start();
 $('game-record').onclick = openGameRecord;
+$('strategy-record').onclick = () => setStrategyPanel($('strategy-panel').hidden);
+$('close-strategies').onclick = () => setStrategyPanel(false);
 $('decision-record').onclick = () => setDecisionPanel($('decision-panel').hidden);
 $('close-decisions').onclick = () => setDecisionPanel(false);
 $('review-record').onclick = () => setReviewPanel($('review-panel').hidden);
@@ -492,6 +728,8 @@ $('decline').onclick = () => action({ type:'bid', value:0 });
 $('pass').onclick = () => action({ type:'pass' });
 $('play').onclick = () => selected.size ? action({ type:'play', cards:[...selected] }) : showMessage('请先选择要出的牌', true);
 document.querySelectorAll('.perspectives button').forEach((button) => button.onclick = () => switchSeat(button.dataset.seat));
+document.querySelectorAll('[data-rounds]').forEach((button) => button.onclick = () => { const rounds = Number(button.dataset.rounds); if (rounds !== selectedRounds) create(rounds); });
+document.querySelectorAll('[data-strategy-seat]').forEach((button) => button.onclick = () => { strategySeat = normalizeSeat(button.dataset.strategySeat); renderStrategyDocument(); });
 $('replay-prev').onclick = () => stepReplay(-1);
 $('replay-toggle').onclick = toggleReplay;
 $('replay-next').onclick = () => stepReplay(1);

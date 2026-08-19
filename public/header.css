@@ -1,0 +1,28 @@
+.game-brand {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 14px;
+}
+
+.score-info {
+  flex: none;
+  padding: 7px 11px;
+  border: 1px solid #d0e6ff55;
+  border-radius: 8px;
+  background: #0c37705c;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.game-info { margin-left: auto; }
+.competition-info { flex: none; white-space: nowrap; }
+
+@media(max-width: 760px) {
+  .game-header { gap: 6px; }
+  .game-brand { gap: 0; }
+  .score-info { padding: 6px 8px; font-size: 11px; }
+  .game-info { width: auto; flex: 1; }
+}

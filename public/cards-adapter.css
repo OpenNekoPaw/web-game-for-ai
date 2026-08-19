@@ -53,7 +53,7 @@
 @media(max-width:760px){
   .game-info .view-toggle{padding:6px 8px;font-size:11px}
   .turn-timer{top:40%;font-size:18px;padding:7px 14px}
-  .opponent-face{width:220px;min-height:82px}
-  .opponent-face .playingCards .hand{min-height:76px;max-width:220px}
+  .opponent-face{width:170px;min-height:82px}
+  .opponent-face .playingCards .hand{min-height:76px;max-width:170px}
   .opponent-face .card{width:1.7em;height:2.45em;font-size:.75em}
 }

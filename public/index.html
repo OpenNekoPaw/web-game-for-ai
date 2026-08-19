@@ -5,17 +5,30 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>斗地主</title>
   <link rel="stylesheet" href="/public/cards.css" />
-  <link rel="stylesheet" href="/public/styles.css" />
-  <link rel="stylesheet" href="/public/lifecycle.css?v=4" />
-  <link rel="stylesheet" href="/public/cards-adapter.css?v=4" />
+  <link rel="stylesheet" href="/public/styles.css?v=3" />
+  <link rel="stylesheet" href="/public/header.css?v=2" />
+  <link rel="stylesheet" href="/public/lifecycle.css?v=11" />
+  <link rel="stylesheet" href="/public/cards-adapter.css?v=5" />
 </head>
 <body>
   <main class="game-page">
     <header class="game-header">
-      <h1>斗地主</h1>
+      <div class="game-brand">
+        <h1>斗地主</h1>
+        <span id="score-info" class="score-info" aria-label="比赛比分" hidden></span>
+      </div>
       <div class="game-info">
         <button id="global-view" class="view-toggle" type="button" aria-pressed="false">全局牌面</button>
         <nav class="perspectives" aria-label="切换视角"><button data-seat="0" type="button">A</button><button data-seat="1" type="button">B</button><button data-seat="2" type="button">C</button></nav>
+        <div id="replay-controls" class="replay-controls" aria-label="回放控制" hidden>
+          <button id="replay-prev" type="button" aria-label="上一步" title="上一步">‹</button>
+          <button id="replay-toggle" class="primary" type="button">播放</button>
+          <button id="replay-next" type="button" aria-label="下一步" title="下一步">›</button>
+          <input id="replay-progress" type="range" min="0" value="0" aria-label="回放进度" />
+          <span id="replay-position">1 / 1</span>
+          <span id="replay-event"></span>
+        </div>
+        <button id="strategy-record" type="button" hidden>玩家策略</button>
         <button id="decision-record" type="button" hidden>决策记录</button>
         <button id="review-record" type="button" hidden>复盘总结</button>
         <span id="competition-info" class="competition-info" hidden></span>
@@ -24,18 +37,19 @@
       </div>
     </header>
     <section id="game-table" class="table">
-      <div id="replay-controls" class="replay-controls" hidden>
-        <button id="replay-prev" type="button">上一步</button>
-        <button id="replay-toggle" class="primary" type="button">播放</button>
-        <button id="replay-next" type="button">下一步</button>
-        <input id="replay-progress" type="range" min="0" value="0" aria-label="回放进度" />
-        <span id="replay-position">1 / 1</span>
-        <span id="replay-event"></span>
-      </div>
       <div class="seat opponent seat-left" id="left-seat"><div class="player"><span class="avatar" id="left-avatar">B</span><span><strong id="left-name">玩家 B</strong><small id="left-count">17 张</small></span></div><div id="left-cards" class="opponent-cards cards-back vertical"></div><div id="left-play" class="played-slot"></div></div>
       <div class="seat opponent seat-right" id="right-seat"><div class="player"><span class="avatar" id="right-avatar">C</span><span><strong id="right-name">玩家 C</strong><small id="right-count">17 张</small></span></div><div id="right-cards" class="opponent-cards cards-back vertical"></div><div id="right-play" class="played-slot"></div></div>
       <div class="seat seat-self"><div class="player"><span class="avatar human" id="self-avatar">A</span><span><strong id="self-name">你的手牌</strong><small id="self-count">17 张</small></span></div><div id="self-play" class="played-slot"></div><footer class="actions"><button id="bid" class="primary">叫地主</button><button id="decline" class="secondary">不叫</button><button id="pass" class="secondary">不要</button><button id="play" class="primary">出牌</button></footer><div id="my-hand" class="hand"></div></div>
-      <div class="middle"><div id="game-lifecycle" class="game-lifecycle" hidden><strong id="game-status"></strong><small id="ready-status"></small><button id="start-game" class="primary" type="button"></button></div><div id="countdown" class="countdown turn-timer" aria-live="polite"></div><div class="bottom"><span>底牌</span><div id="bottom-cards" class="bottom-cards"></div></div></div>
+      <div class="middle"><div id="game-lifecycle" class="game-lifecycle" hidden><strong id="game-status"></strong><small id="ready-status"></small><div id="match-setup" class="match-setup"><span>比赛局数</span><div class="round-options" role="group" aria-label="比赛局数"><button type="button" data-rounds="1">1局</button><button type="button" data-rounds="3">3局</button><button type="button" data-rounds="5">5局</button><button type="button" data-rounds="7">7局</button></div></div><button id="start-game" class="primary" type="button"></button></div><div id="countdown" class="countdown turn-timer" aria-live="polite"></div><div class="bottom"><span>底牌</span><div id="bottom-cards" class="bottom-cards"></div></div></div>
+      <aside id="strategy-panel" class="decision-panel strategy-panel" aria-label="本局玩家策略" hidden>
+        <header><strong>玩家策略</strong><button id="close-strategies" type="button" aria-label="关闭玩家策略">×</button></header>
+        <nav class="strategy-tabs" aria-label="切换玩家策略">
+          <button type="button" data-strategy-seat="0">A</button>
+          <button type="button" data-strategy-seat="1">B</button>
+          <button type="button" data-strategy-seat="2">C</button>
+        </nav>
+        <div id="strategy-content" class="decision-list strategy-content"></div>
+      </aside>
       <aside id="decision-panel" class="decision-panel" aria-label="Agent 决策记录" hidden>
         <header><strong>决策记录</strong><button id="close-decisions" type="button" aria-label="关闭决策记录">×</button></header>
         <div id="decision-list" class="decision-list"></div>
@@ -51,6 +65,6 @@
       <div id="message" class="message" role="status"></div>
     </section>
   </main>
-  <script type="module" src="/public/app.js?v=18"></script>
+  <script type="module" src="/public/app.js?v=23"></script>
 </body>
 </html>
