@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 
 const strategiesDirectory = fileURLToPath(new URL('../strategies/ddz/', import.meta.url));
-const DEFAULT_STRATEGY_ID = 'balanced-v1';
+const DEFAULT_STRATEGY_ID = 'default';
 
 export function listStrategies() {
   const strategies = readdirSync(strategiesDirectory)
@@ -35,12 +35,13 @@ function readStrategyFile(path) {
     if (separator < 1) throw new Error('invalid_strategy');
     return [line.slice(0, separator).trim(), line.slice(separator + 1).trim()];
   }));
-  if (!metadata.id || !metadata.name || !metadata.version) throw new Error('invalid_strategy');
+  if (!metadata.id || !metadata.name) throw new Error('invalid_strategy');
+  const fileStats = statSync(path);
   return {
     id: metadata.id,
     name: metadata.name,
-    version: Number(metadata.version),
     description: metadata.description || '',
+    updatedAt: fileStats.mtimeMs,
     hash: createHash('sha256').update(markdown).digest('hex').slice(0, 12),
     markdown
   };

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "mcp": "node mcp-server.js"
+    "mcp": "node mcp-server.js",
+    "test": "REPLAY_PERSISTENCE=memory node --test"
   }
 }

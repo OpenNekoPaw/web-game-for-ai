@@ -5,7 +5,6 @@ import { getStrategy, listStrategies } from './strategy-store.js';
 const games = new Map();
 const competitions = new Map();
 const DEFAULT_TURN_TIMEOUT_MS = 60_000;
-const MIN_TURN_TIMEOUT_MS = 30_000;
 const MAX_TURN_TIMEOUT_MS = 60_000;
 const configuredTurnTimeoutMs = normalizeTurnTimeout(process.env.TURN_TIMEOUT_MS);
 let lastGameTimestamp = 0;
@@ -15,6 +14,7 @@ export function createMatch(options = {}) {
   const game = createGame(nextGameId());
   game.agents = new Map();
   game.players = new Map();
+  game.displayNames = new Map();
   game.ready = new Set();
   game.decisions = [];
   game.actionHistory = [];
@@ -99,26 +99,34 @@ export function getMatch(gameId) {
   return games.get(gameId) || null;
 }
 
-export function joinMatch(gameId, seatId, agentId, strategyId) {
+export function joinMatch(gameId, seatId, agentId, strategyId, displayName) {
   const game = requireMatch(gameId);
   validateSeat(seatId);
   if (game.players.has(seatId)) throw new Error('seat_occupied');
   const occupant = game.agents.get(seatId);
   if (occupant && occupant !== agentId) throw new Error('seat_occupied');
+  const resolvedDisplayName = game.displayNames.has(seatId) && displayName === undefined
+    ? game.displayNames.get(seatId)
+    : normalizeDisplayName(displayName, agentId);
   game.agents.set(seatId, agentId);
+  game.displayNames.set(seatId, resolvedDisplayName);
   if (!game.agentStrategies.has(seatId)) game.agentStrategies.set(seatId, getStrategy(strategyId));
   else if (strategyId && game.agentStrategies.get(seatId).id !== strategyId) throw new Error('strategy_mismatch');
   updateReplayParticipants(gameId, participants(game));
   return observeMatch(gameId, seatId);
 }
 
-export function joinPlayerMatch(gameId, seatId, playerId) {
+export function joinPlayerMatch(gameId, seatId, playerId, displayName) {
   const game = requireMatch(gameId);
   validateSeat(seatId);
   if (game.agents.has(seatId)) throw new Error('seat_occupied');
   const occupant = game.players.get(seatId);
   if (occupant && occupant !== playerId) throw new Error('seat_occupied');
+  const resolvedDisplayName = game.displayNames.has(seatId) && displayName === undefined
+    ? game.displayNames.get(seatId)
+    : normalizeDisplayName(displayName, `玩家 ${['A', 'B', 'C'][seatId]}`);
   game.players.set(seatId, playerId);
+  game.displayNames.set(seatId, resolvedDisplayName);
   updateReplayParticipants(gameId, participants(game));
   return observeMatch(gameId, seatId);
 }
@@ -149,7 +157,16 @@ export function observeMatch(gameId, seatId, options = {}) {
     : [{ type: 'play', cards: 'select from your hand' }, ...(game.lastPlay ? [{ type: 'pass' }] : [])];
   const readySeats = [...game.ready].sort();
   const reviewContext = game.phase === 'over' && game.agents.has(seatId) ? buildReviewContext(game, seatId) : null;
-  return { protocol: 'agent-game.v1', ...publicState(game, seatId, options.revealAll === true), view: options.revealAll === true ? 'global' : 'player', you: seatId, isYourTurn, allowedActions, agentSeats: Object.fromEntries(game.agents), playerSeats: Object.fromEntries(game.players), seatControllers: seatControllers(game), readySeats, allReady: readySeats.length === 3, settlement: structuredClone(game.settlement), competition: game.competitionId ? competitionStateForGame(game, seatId, options.revealAll === true) : null, strategy: game.agentStrategies.has(seatId) ? structuredClone(game.agentStrategies.get(seatId)) : null, strategyAssignments: options.revealAll === true ? strategyAssignments(game) : {}, decisions: options.revealAll === true ? structuredClone(game.decisions) : [], reviews: options.revealAll === true ? reviews(game) : game.reviews.has(seatId) ? { [seatId]: structuredClone(game.reviews.get(seatId)) } : {}, reviewStatus: reviewStatus(game), reviewContext, turnTimeoutMs: game.turnTimeoutMs, turnStartedAt: game.turnStartedAt, turnDeadlineAt: game.turnDeadlineAt, serverNow: Date.now() };
+  return { protocol: 'agent-game.v1', ...publicState(game, seatId, options.revealAll === true), view: options.revealAll === true ? 'global' : 'player', you: seatId, roleContext: roleContext(game, seatId), isYourTurn, allowedActions, agentSeats: Object.fromEntries(game.agents), playerSeats: Object.fromEntries(game.players), seatControllers: seatControllers(game), readySeats, allReady: readySeats.length === 3, settlement: structuredClone(game.settlement), competition: game.competitionId ? competitionStateForGame(game, seatId, options.revealAll === true) : null, strategy: game.agentStrategies.has(seatId) ? structuredClone(game.agentStrategies.get(seatId)) : null, strategyAssignments: options.revealAll === true ? strategyAssignments(game) : {}, decisions: options.revealAll === true ? structuredClone(game.decisions) : [], reviews: options.revealAll === true ? reviews(game) : game.reviews.has(seatId) ? { [seatId]: structuredClone(game.reviews.get(seatId)) } : {}, reviewStatus: reviewStatus(game), reviewContext, turnTimeoutMs: game.turnTimeoutMs, turnStartedAt: game.turnStartedAt, turnDeadlineAt: game.turnDeadlineAt, serverNow: Date.now() };
+}
+
+export function getMatchStrategies(gameId) {
+  const game = requireMatch(gameId);
+  return {
+    protocol: 'agent-game.v1',
+    gameId,
+    participants: structuredClone(participants(game))
+  };
 }
 
 export function submitMatchAction(gameId, seatId, action, expectedSeq, options = {}) {
@@ -169,22 +186,46 @@ export function submitMatchAction(gameId, seatId, action, expectedSeq, options =
   }
   settleGame(game);
   const decidedAt = Date.now();
-  const decisionRecord = decision ? {
-    seq: game.seq,
-    at: decidedAt,
-    seatId,
+  const decisionRecord = createDecisionRecord(game, seatId, action, decision, {
     source: options.source || 'player',
     phase,
-    action: structuredClone(action),
-    ...decision,
-    durationMs: turnStartedAt === null ? null : Math.max(0, decidedAt - turnStartedAt)
-  } : null;
+    decidedAt,
+    turnStartedAt
+  });
   game.actionHistory.push({ seq: game.seq, at: decidedAt, seatId, source: options.source || 'player', phase, action: structuredClone(action) });
   if (decisionRecord) game.decisions.push(decisionRecord);
   updateAcceptedStats(game.actionStats[seatId], action, decisionRecord?.durationMs);
   resetTurnClock(game);
   recordFrame(game, { type: 'action', source: options.source || 'player', seatId, action, ...(decisionRecord ? { decision: decisionRecord } : {}) });
   return observeMatch(gameId, seatId);
+}
+
+export function createDecisionRecord(game, seatId, action, decision, options = {}) {
+  if (!decision) return null;
+  const decidedAt = options.decidedAt ?? Date.now();
+  const assignedStrategy = game.agentStrategies?.has(seatId)
+    ? game.agentStrategies.get(seatId)
+    : null;
+  const strategy = assignedStrategy ? {
+    id: assignedStrategy.id,
+    name: assignedStrategy.name,
+    updatedAt: assignedStrategy.updatedAt,
+    hash: assignedStrategy.hash
+  } : null;
+  return {
+    gameId: game.gameId,
+    seq: game.seq,
+    at: decidedAt,
+    seatId,
+    source: options.source || 'player',
+    phase: options.phase ?? game.phase,
+    action: structuredClone(action),
+    strategy,
+    ...decision,
+    durationMs: options.turnStartedAt === null || options.turnStartedAt === undefined
+      ? null
+      : Math.max(0, decidedAt - options.turnStartedAt)
+  };
 }
 
 export function getStrategies() {
@@ -288,6 +329,7 @@ function replayState(game, now = Date.now()) {
     ...publicState(game, null, true),
     view: 'global',
     you: null,
+    roleContext: null,
     isYourTurn: false,
     allowedActions: [],
     agentSeats: Object.fromEntries(game.agents),
@@ -330,8 +372,38 @@ function occupiedSeats(game) {
 
 function seatControllers(game) {
   return Object.fromEntries(occupiedSeats(game).map((seatId) => [seatId, game.agents.has(seatId)
-    ? { type: 'agent', id: game.agents.get(seatId) }
-    : { type: 'player', id: game.players.get(seatId) }]));
+    ? { type: 'agent', id: game.agents.get(seatId), displayName: game.displayNames?.get(seatId) || game.agents.get(seatId) }
+    : { type: 'player', id: game.players.get(seatId), displayName: game.displayNames?.get(seatId) || `玩家 ${['A', 'B', 'C'][seatId]}` }]));
+}
+
+export function roleContext(game, seatId) {
+  const you = Number(seatId);
+  const previousSeat = (you + 2) % 3;
+  const nextSeat = (you + 1) % 3;
+  const landlordSeat = (game.phase === 'play' || game.phase === 'over') && Number.isInteger(game.landlord)
+    ? game.landlord
+    : null;
+  const role = landlordSeat === null ? null : landlordSeat === you ? 'landlord' : 'farmer';
+  const teammateSeat = role === 'farmer'
+    ? [0, 1, 2].find((candidate) => candidate !== you && candidate !== landlordSeat) ?? null
+    : null;
+  const landlordUpstreamSeat = landlordSeat === null ? null : (landlordSeat + 2) % 3;
+  const landlordDownstreamSeat = landlordSeat === null ? null : (landlordSeat + 1) % 3;
+  return {
+    role,
+    landlordSeat,
+    teammateSeat,
+    previousSeat,
+    nextSeat,
+    farmerPosition: role === 'farmer'
+      ? you === landlordUpstreamSeat ? 'landlord_upstream' : 'landlord_downstream'
+      : null,
+    landlordUpstreamSeat,
+    landlordDownstreamSeat,
+    // Backward-compatible aliases. Strategy selection must use farmerPosition.
+    upstreamSeat: previousSeat,
+    downstreamSeat: nextSeat
+  };
 }
 
 function participants(game) {
@@ -347,7 +419,7 @@ function strategyAssignments(game) {
 
 function strategySummary(strategy) {
   if (!strategy) return null;
-  return { id: strategy.id, name: strategy.name, version: strategy.version, hash: strategy.hash, description: strategy.description };
+  return { id: strategy.id, name: strategy.name, updatedAt: strategy.updatedAt, hash: strategy.hash, description: strategy.description };
 }
 
 function reviews(game) {
@@ -360,29 +432,60 @@ function reviewStatus(game) {
   return { expectedSeats, submittedSeats, complete: expectedSeats.length > 0 && expectedSeats.every((seatId) => game.reviews.has(seatId)) };
 }
 
-function settleGame(game) {
-  if (game.phase !== 'over' || game.settlement) return;
-  const scoreDelta = game.winner === 'landlord'
+export function calculateSettlement(game) {
+  const playsBySeat = Array.isArray(game.playsBySeat) && game.playsBySeat.length === 3
+    ? game.playsBySeat.map((count) => Math.max(0, Number(count) || 0))
+    : [0, 0, 0];
+  const bombCount = Math.max(0, Number(game.bombCount) || 0);
+  const rocketCount = Math.max(0, Number(game.rocketCount) || 0);
+  const farmerSeats = [0, 1, 2].filter((seatId) => seatId !== game.landlord);
+  const spring = game.winner === 'landlord' && farmerSeats.every((seatId) => playsBySeat[seatId] === 0);
+  const antiSpring = game.winner === 'farmers' && playsBySeat[game.landlord] > 0 && farmerSeats.some((seatId) => playsBySeat[seatId] === 0);
+  const multiplierReasons = [
+    ...Array.from({ length: bombCount }, () => 'bomb'),
+    ...Array.from({ length: rocketCount }, () => 'rocket'),
+    ...(spring ? ['spring'] : []),
+    ...(antiSpring ? ['anti-spring'] : [])
+  ];
+  const multiplier = 2 ** multiplierReasons.length;
+  const baseScoreDelta = game.winner === 'landlord'
     ? [0, 1, 2].map((seatId) => seatId === game.landlord ? 2 : -1)
     : [0, 1, 2].map((seatId) => seatId === game.landlord ? -2 : 1);
+  return {
+    scoring: 'ddz-standard-v1',
+    baseScore: 1,
+    multiplier,
+    multiplierReasons,
+    bombCount,
+    rocketCount,
+    spring,
+    antiSpring,
+    playsBySeat,
+    scoreDelta: baseScoreDelta.map((score) => score * multiplier)
+  };
+}
+
+function settleGame(game) {
+  if (game.phase !== 'over' || game.settlement) return;
+  const scoring = calculateSettlement(game);
   game.settlement = {
-    scoring: 'fixed-zero-sum-v1',
-    multiplier: 1,
+    ...scoring,
     winner: game.winner,
     landlord: game.landlord,
-    scoreDelta,
     finalCardCounts: game.hands.map((cards) => cards.length),
     settledAt: Date.now()
   };
   if (!game.competitionId) return;
   const competition = requireCompetition(game.competitionId);
-  competition.scores = competition.scores.map((score, seatId) => score + scoreDelta[seatId]);
+  competition.scores = competition.scores.map((score, seatId) => score + scoring.scoreDelta[seatId]);
   competition.rounds.push({
     roundNumber: game.roundNumber,
     gameId: game.gameId,
     winner: game.winner,
     landlord: game.landlord,
-    scoreDelta: [...scoreDelta],
+    scoreDelta: [...scoring.scoreDelta],
+    multiplier: scoring.multiplier,
+    multiplierReasons: [...scoring.multiplierReasons],
     cumulativeScores: [...competition.scores],
     finalCardCounts: game.hands.map((cards) => cards.length),
     settledAt: game.settlement.settledAt,
@@ -408,6 +511,7 @@ function advanceCompetitionAfterRound(game) {
   const nextGame = createMatch({ competitionId: competition.competitionId, roundNumber: nextRound, turnTimeoutMs: competition.turnTimeoutMs });
   nextGame.agents = new Map(game.agents);
   nextGame.players = new Map(game.players);
+  nextGame.displayNames = new Map(game.displayNames);
   nextGame.agentStrategies = new Map([...game.agentStrategies].map(([seatId, strategy]) => [seatId, structuredClone(strategy)]));
   updateReplayParticipants(nextGame.gameId, participants(nextGame));
   competition.currentRound = nextRound;
@@ -454,6 +558,8 @@ function buildCompetitionReviewContext(competition, seatId) {
     landlord: round.landlord,
     scoreDelta: round.scoreDelta[seatId],
     cumulativeScore: round.cumulativeScores[seatId],
+    multiplier: round.multiplier ?? 1,
+    multiplierReasons: [...(round.multiplierReasons || [])],
     finalCardCounts: round.finalCardCounts,
     review: round.reviews?.[seatId] || null
   }));
@@ -482,6 +588,7 @@ function buildReviewContext(game, seatId) {
     result: won ? 'win' : 'loss',
     winner: game.winner,
     landlord: game.landlord,
+    settlement: structuredClone(game.settlement),
     finalCardCounts: game.hands.map((cards) => cards.length),
     strategy: structuredClone(game.agentStrategies.get(seatId)),
     stats: {
@@ -511,15 +618,21 @@ function updateAcceptedStats(stats, action, durationMs) {
 }
 
 function normalizeTurnTimeout(value) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return DEFAULT_TURN_TIMEOUT_MS;
-  return Math.min(MAX_TURN_TIMEOUT_MS, Math.max(MIN_TURN_TIMEOUT_MS, Math.round(parsed)));
+  return DEFAULT_TURN_TIMEOUT_MS;
 }
 
 function normalizeTotalRounds(value) {
   const rounds = Number(value ?? 3);
   if (![3, 5, 7].includes(rounds)) throw new Error('invalid_total_rounds');
   return rounds;
+}
+
+function normalizeDisplayName(value, fallback) {
+  if (value === undefined || value === null) return String(fallback).trim().slice(0, 40);
+  if (typeof value !== 'string') throw new Error('invalid_display_name');
+  const displayName = value.trim();
+  if (!displayName || displayName.length > 40) throw new Error('invalid_display_name');
+  return displayName;
 }
 
 function normalizeDecision(value) {

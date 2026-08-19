@@ -56,6 +56,7 @@ function startBidding(state, message) {
   state.bottom = deck.slice(51);
   state.landlord = null;
   state.firstBidder = randomSeat();
+  state.firstCaller = null;
   state.current = state.firstBidder;
   state.bidStage = 'call';
   state.bidRound = 0;
@@ -66,6 +67,9 @@ function startBidding(state, message) {
   state.tablePlays = [null, null, null];
   state.tablePasses = [false, false, false];
   state.passCount = 0;
+  state.playsBySeat = [0, 0, 0];
+  state.bombCount = 0;
+  state.rocketCount = 0;
   state.winner = null;
   state.log.push(`${message}，座位${state.firstBidder}开始叫地主`);
 }
@@ -89,6 +93,7 @@ export function createGame(gameId = `ddz-${Date.now()}`) {
     bottom: [],
     landlord: null,
     firstBidder: null,
+    firstCaller: null,
     current: null,
     bidStage: null,
     bidRound: 0,
@@ -99,6 +104,9 @@ export function createGame(gameId = `ddz-${Date.now()}`) {
     tablePlays: [null, null, null],
     tablePasses: [false, false, false],
     passCount: 0,
+    playsBySeat: [0, 0, 0],
+    bombCount: 0,
+    rocketCount: 0,
     winner: null,
     seq: 0,
     log: ['牌局创建，等待三家准备']
@@ -112,7 +120,7 @@ export function startGame(state) {
 }
 
 export function publicState(state, seatId = null, debug = false) {
-  return { gameId: state.gameId, game: state.game, phase: state.phase, landlord: state.landlord, firstBidder: state.firstBidder, current: state.current, bidStage: state.bidStage, bidRound: state.bidRound, landlordCandidate: state.landlordCandidate, robTurnsRemaining: state.robTurnsRemaining, bidHistory: state.bidHistory, lastPlay: state.lastPlay, tablePlays: state.tablePlays, tablePasses: state.tablePasses, passCount: state.passCount, winner: state.winner, seq: state.seq, bottom: state.phase === 'play' || state.phase === 'over' || debug ? state.bottom : [], hands: state.hands.map((h, i) => ({ seatId: i, count: h.length, cards: debug || i === seatId ? h : [] })), log: state.log.slice(-12) };
+  return { gameId: state.gameId, game: state.game, phase: state.phase, landlord: state.landlord, firstBidder: state.firstBidder, firstCaller: state.firstCaller, current: state.current, bidStage: state.bidStage, bidRound: state.bidRound, landlordCandidate: state.landlordCandidate, robTurnsRemaining: state.robTurnsRemaining, bidHistory: state.bidHistory, lastPlay: state.lastPlay, tablePlays: state.tablePlays, tablePasses: state.tablePasses, passCount: state.passCount, playsBySeat: state.playsBySeat || [0, 0, 0], bombCount: state.bombCount || 0, rocketCount: state.rocketCount || 0, winner: state.winner, seq: state.seq, bottom: state.phase === 'play' || state.phase === 'over' || debug ? state.bottom : [], hands: state.hands.map((h, i) => ({ seatId: i, count: h.length, cards: debug || i === seatId ? h : [] })), log: state.log.slice(-12) };
 }
 
 export function applyAction(state, seatId, action) {
@@ -129,6 +137,7 @@ export function applyAction(state, seatId, action) {
     if (state.bidStage === 'call') {
       state.log.push(`座位${seatId} ${action.value === 1 ? '叫地主' : '不叫'}`);
       if (action.value === 1) {
+        state.firstCaller = seatId;
         state.landlordCandidate = seatId;
         state.bidStage = 'rob';
         state.robTurnsRemaining = 2;
@@ -140,7 +149,12 @@ export function applyAction(state, seatId, action) {
       state.log.push(`座位${seatId} ${action.value === 1 ? '抢地主' : '不抢'}`);
       if (action.value === 1) state.landlordCandidate = seatId;
       state.robTurnsRemaining--;
-      if (state.robTurnsRemaining <= 0) finalizeLandlord(state);
+      const completedCounterRob = seatId === state.firstCaller;
+      if (state.robTurnsRemaining <= 0 && !completedCounterRob && state.landlordCandidate !== state.firstCaller) {
+        state.robTurnsRemaining = 1;
+        state.current = state.firstCaller;
+        state.log.push(`座位${state.firstCaller} 获得最终抢地主机会`);
+      } else if (state.robTurnsRemaining <= 0) finalizeLandlord(state);
       else state.current = (seatId + 1) % 3;
     } else throw new Error('invalid_bid_stage');
     state.seq++; return;
@@ -156,6 +170,9 @@ export function applyAction(state, seatId, action) {
   const playedCards = sortCards(action.cards);
   if (!state.lastPlay) { state.tablePlays = [null, null, null]; state.tablePasses = [false, false, false]; }
   state.tablePasses[seatId] = false; state.hands[seatId] = hand.filter(c => !action.cards.includes(c)); state.lastPlay = { ...play, seatId, cards: playedCards }; state.tablePlays[seatId] = playedCards; state.passCount = 0; state.log.push(`座位${seatId} 出牌 ${action.cards.map(cardLabel).join(' ')}`);
+  state.playsBySeat ||= [0, 0, 0]; state.playsBySeat[seatId] += 1;
+  if (play.type === 'bomb') state.bombCount = (state.bombCount || 0) + 1;
+  if (play.type === 'rocket') state.rocketCount = (state.rocketCount || 0) + 1;
   if (state.hands[seatId].length === 0) { state.winner = state.landlord === seatId ? 'landlord' : 'farmers'; state.phase = 'over'; state.log.push(state.winner === 'landlord' ? '地主获胜' : '农民获胜'); } else state.current = (seatId + 1) % 3;
   state.seq++;
 }

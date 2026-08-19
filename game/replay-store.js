@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 const recordsDirectory = fileURLToPath(new URL('../records/', import.meta.url));
 const records = new Map();
+const persistenceEnabled = process.env.REPLAY_PERSISTENCE !== 'memory';
 
 export function createReplay(gameId, state, participants = {}) {
   const now = Date.now();
@@ -39,7 +40,7 @@ export function appendReplayFrame(gameId, event, state, participants = {}) {
     state: structuredClone(state)
   });
   replay.updatedAt = now;
-  if (state.phase === 'over' && replay.completedAt === null) replay.completedAt = now;
+  if (isCompletedState(state) && replay.completedAt === null) replay.completedAt = now;
   persistReplay(replay);
 }
 
@@ -61,19 +62,22 @@ export function listReplays(options = {}) {
   const offset = Math.max(0, Number(options.offset) || 0);
   const status = options.status === 'completed' ? 'completed' : 'all';
   let gameIds = [];
-  try {
-    gameIds = readdirSync(recordsDirectory)
-      .filter((name) => /^ddz-[0-9]+\.json$/.test(name))
-      .map((name) => name.slice(0, -5))
-      .sort((left, right) => Number(right.slice(4)) - Number(left.slice(4)));
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
+  if (persistenceEnabled) {
+    try {
+      gameIds = readdirSync(recordsDirectory)
+        .filter((name) => /^ddz-[0-9]+\.json$/.test(name))
+        .map((name) => name.slice(0, -5));
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
   }
+  gameIds = [...new Set([...gameIds, ...records.keys()])]
+    .sort((left, right) => Number(right.slice(4)) - Number(left.slice(4)));
   const summaries = gameIds.flatMap((gameId) => {
     try { return [replaySummary(readReplay(gameId))]; }
     catch { return []; }
   });
-  const filtered = status === 'completed' ? summaries.filter((item) => item.completedAt !== null) : summaries;
+  const filtered = status === 'completed' ? summaries.filter(isCompletedSummary) : summaries;
   return { total: filtered.length, offset, limit, status, items: filtered.slice(offset, offset + limit) };
 }
 
@@ -83,11 +87,20 @@ function requireReplay(gameId) {
 }
 
 function persistReplay(replay) {
+  if (!persistenceEnabled) return;
   mkdirSync(recordsDirectory, { recursive: true });
   const path = recordPath(replay.gameId);
   const temporaryPath = `${path}.tmp`;
   writeFileSync(temporaryPath, `${JSON.stringify(replay, null, 2)}\n`);
   renameSync(temporaryPath, path);
+}
+
+function isCompletedState(state) {
+  return state?.phase === 'over' && ['landlord', 'farmers'].includes(state.winner);
+}
+
+function isCompletedSummary(summary) {
+  return summary.completedAt !== null && isCompletedState(summary);
 }
 
 function replaySummary(replay) {
@@ -101,11 +114,24 @@ function replaySummary(replay) {
     phase: state.phase || 'waiting',
     winner: state.winner ?? null,
     landlord: state.landlord ?? null,
+    settlement: state.settlement ? {
+      scoring: state.settlement.scoring,
+      baseScore: state.settlement.baseScore,
+      multiplier: state.settlement.multiplier,
+      multiplierReasons: [...(state.settlement.multiplierReasons || [])],
+      scoreDelta: [...(state.settlement.scoreDelta || [])]
+    } : null,
     frameCount: replay.frames.length,
     participants: Object.fromEntries(Object.entries(replay.participants || {}).map(([seatId, participant]) => [seatId, {
       type: participant.type,
       id: participant.id,
-      strategy: participant.strategy ? { id: participant.strategy.id, name: participant.strategy.name, version: participant.strategy.version } : null
+      displayName: participant.displayName,
+      strategy: participant.strategy ? {
+        id: participant.strategy.id,
+        name: participant.strategy.name,
+        updatedAt: participant.strategy.updatedAt,
+        hash: participant.strategy.hash
+      } : null
     }])),
     competition: state.competition ? {
       competitionId: state.competition.competitionId,

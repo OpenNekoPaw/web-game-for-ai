@@ -2,7 +2,7 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createCompetition, createMatch, getMatch, getReplay, getStrategies, joinMatch, joinPlayerMatch, observeCompetition, observeMatch, runBot, startMatch, submitCompetitionReview, submitMatchAction, submitMatchReview, tickMatches } from './game/store.js';
+import { createCompetition, createMatch, getMatch, getMatchStrategies, getReplay, getStrategies, joinMatch, joinPlayerMatch, observeCompetition, observeMatch, runBot, startMatch, submitCompetitionReview, submitMatchAction, submitMatchReview, tickMatches } from './game/store.js';
 import { listReplays } from './game/replay-store.js';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
@@ -17,7 +17,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname.startsWith('/public/')) { const file = join(root, url.pathname); const data = await readFile(file); res.writeHead(200, {'content-type': mime[extname(file)] || 'application/octet-stream'}); return res.end(data); }
     if (req.method === 'GET' && url.pathname === '/agent/v1/strategies') return json(res, 200, { protocol:'agent-game.v1', ...getStrategies() });
     if (req.method === 'GET' && url.pathname === '/api/replays') return json(res, 200, listReplays({ limit:url.searchParams.get('limit'), offset:url.searchParams.get('offset'), status:url.searchParams.get('status') }));
-    if (req.method === 'POST' && url.pathname === '/agent/v1/competitions') return json(res, 201, createCompetition(await body(req)));
+    if (req.method === 'POST' && (url.pathname === '/api/competitions' || url.pathname === '/agent/v1/competitions')) return json(res, 201, createCompetition(await body(req)));
     const agentCompetition = url.pathname.match(/^\/agent\/v1\/competitions\/([^/]+)(?:\/(observe|review))?$/);
     if (agentCompetition) {
       const data = req.method === 'POST' ? await body(req) : {};
@@ -40,17 +40,18 @@ const server = http.createServer(async (req, res) => {
       const data = req.method === 'POST' ? await body(req) : {};
       const seatId = Number(req.method === 'GET' ? url.searchParams.get('seatId') : data.seatId);
       try {
-        if (agentMatch[2] === 'join' && req.method === 'POST') return json(res, 200, joinMatch(agentMatch[1], seatId, String(data.agentId || 'anonymous'), data.strategyId));
+        if (agentMatch[2] === 'join' && req.method === 'POST') return json(res, 200, joinMatch(agentMatch[1], seatId, String(data.agentId || 'anonymous'), data.strategyId, data.displayName));
         if (agentMatch[2] === 'observe' && req.method === 'GET') return json(res, 200, observeMatch(agentMatch[1], seatId));
         if (agentMatch[2] === 'start' && req.method === 'POST') return json(res, 200, startMatch(agentMatch[1], seatId));
         if (agentMatch[2] === 'actions' && req.method === 'POST') return json(res, 200, submitMatchAction(agentMatch[1], seatId, data.action, data.seq, { source:'agent', decision:data.decision }));
         if (agentMatch[2] === 'review' && req.method === 'POST') return json(res, 200, submitMatchReview(agentMatch[1], seatId, data.review));
       } catch (error) { return json(res, 400, { protocol:'agent-game.v1', ok:false, error:error.message }); }
     }
-    const match = url.pathname.match(/^\/api\/games\/([^/]+)(?:\/(state|join|start|actions|bot))?$/); if (!match) return json(res, 404, { error: 'not_found' });
+    const match = url.pathname.match(/^\/api\/games\/([^/]+)(?:\/(state|strategies|join|start|actions|bot))?$/); if (!match) return json(res, 404, { error: 'not_found' });
     const game = getMatch(match[1]); if (!game) return json(res, 404, { error: 'game_not_found' });
     if (req.method === 'GET' && match[2] === 'state') { const seat = Number(url.searchParams.get('seat')); const revealAll = url.searchParams.get('view') === 'global'; try { return json(res, 200, observeMatch(match[1], seat, { revealAll })); } catch (error) { return json(res, 400, {error:error.message}); } }
-    if (req.method === 'POST' && match[2] === 'join') { const data = await body(req); try { return json(res, 200, joinPlayerMatch(match[1], Number(data.seatId), String(data.playerId || `h5-player-${data.seatId}`))); } catch (error) { return json(res, 400, {ok:false,error:error.message}); } }
+    if (req.method === 'GET' && match[2] === 'strategies') { if (url.searchParams.get('view') !== 'global') return json(res, 403, { error:'global_view_required' }); return json(res, 200, getMatchStrategies(match[1])); }
+    if (req.method === 'POST' && match[2] === 'join') { const data = await body(req); try { return json(res, 200, joinPlayerMatch(match[1], Number(data.seatId), String(data.playerId || `h5-player-${data.seatId}`), data.displayName)); } catch (error) { return json(res, 400, {ok:false,error:error.message}); } }
     if (req.method === 'POST' && match[2] === 'start') { const data = await body(req); try { return json(res, 200, startMatch(match[1], Number(data.seatId))); } catch (error) { return json(res, 400, {ok:false,error:error.message}); } }
     if (req.method === 'POST' && match[2] === 'actions') { const data = await body(req); try { const state = submitMatchAction(match[1], Number(data.seatId), data.action, data.seq, { source:'player' }); return json(res, 200, { ok: true, seq: state.seq }); } catch (error) { return json(res, 400, { ok: false, error: error.message }); } }
     if (req.method === 'POST' && match[2] === 'bot') { try { return json(res, 200, {ok:true,...runBot(match[1])}); } catch (error) { return json(res, 400, {ok:false,error:error.message}); } }
