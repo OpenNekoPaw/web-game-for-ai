@@ -88,6 +88,7 @@ function startBidding(state, message, presetDeal = null) {
   state.bidRound = 0;
   state.landlordCandidate = null;
   state.robTurnsRemaining = 0;
+  state.robQueue = [];
   state.bidHistory = [];
   state.lastPlay = null;
   state.tablePlays = [null, null, null];
@@ -125,6 +126,7 @@ export function createGame(gameId = `ddz-${Date.now()}`) {
     bidRound: 0,
     landlordCandidate: null,
     robTurnsRemaining: 0,
+    robQueue: [],
     bidHistory: [],
     lastPlay: null,
     tablePlays: [null, null, null],
@@ -202,23 +204,33 @@ export function applyAction(state, seatId, action) {
       if (action.value === 1) {
         state.firstCaller = seatId;
         state.landlordCandidate = seatId;
-        state.bidStage = 'rob';
-        state.robTurnsRemaining = 2;
-        state.current = (seatId + 1) % 3;
+        const declinedCallSeats = new Set(state.bidHistory
+          .filter((entry) => entry.stage === 'call' && entry.value === 0)
+          .map((entry) => entry.seatId));
+        state.robQueue = [1, 2]
+          .map((offset) => (seatId + offset) % 3)
+          .filter((candidate) => !declinedCallSeats.has(candidate));
+        state.robTurnsRemaining = state.robQueue.length;
+        if (state.robQueue.length) {
+          state.bidStage = 'rob';
+          state.current = state.robQueue[0];
+        } else finalizeLandlord(state);
       } else if (state.bidRound >= 3) {
         startBidding(state, '三家都不叫，重新发牌');
       } else state.current = (seatId + 1) % 3;
     } else if (state.bidStage === 'rob') {
       state.log.push(`座位${seatId} ${action.value === 1 ? '抢地主' : '不抢'}`);
       if (action.value === 1) state.landlordCandidate = seatId;
-      state.robTurnsRemaining--;
-      const completedCounterRob = seatId === state.firstCaller;
-      if (state.robTurnsRemaining <= 0 && !completedCounterRob && state.landlordCandidate !== state.firstCaller) {
-        state.robTurnsRemaining = 1;
-        state.current = state.firstCaller;
+      state.robQueue ||= [];
+      if (state.robQueue[0] === seatId) state.robQueue.shift();
+      else state.robQueue = state.robQueue.filter((candidate) => candidate !== seatId);
+      if (!state.robQueue.length && seatId !== state.firstCaller && state.landlordCandidate !== state.firstCaller) {
+        state.robQueue.push(state.firstCaller);
         state.log.push(`座位${state.firstCaller} 获得最终抢地主机会`);
-      } else if (state.robTurnsRemaining <= 0) finalizeLandlord(state);
-      else state.current = (seatId + 1) % 3;
+      }
+      state.robTurnsRemaining = state.robQueue.length;
+      if (state.robQueue.length) state.current = state.robQueue[0];
+      else finalizeLandlord(state);
     } else throw new Error('invalid_bid_stage');
     state.seq++; return;
   }

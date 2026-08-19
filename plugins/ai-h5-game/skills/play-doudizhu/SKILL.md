@@ -38,7 +38,7 @@ Control exactly one seat while the independently running H5 game service remains
 1. Call `observe_game` immediately before deciding.
 2. Submit nothing when `isYourTurn` is false or `phase` is `waiting` or `over`.
 3. Select only an action represented by `allowedActions`.
-4. During `phase=bid`, use `bidStage` to interpret `value`: `call` means call or decline; `rob` means rob or decline. If another seat robs, `firstCaller` may receive one final counter-rob turn before the landlord is fixed.
+4. During `phase=bid`, use `bidStage` to interpret `value`: `call` means call or decline; `rob` means rob or decline. A seat that already declined during `call` is no longer eligible to rob. If an eligible later seat robs, `firstCaller` may receive one final counter-rob turn before the landlord is fixed.
 5. During `phase=play`, use `roleContext` to select the matching section of the locked strategy: `地主策略`, `地主上家策略`, or `地主下家策略`. Use [references/rules.md](references/rules.md) only to interpret legal combinations and [references/strategy.md](references/strategy.md) to understand how the editable strategy relates to this Skill.
 6. Interpret the private hand from the semantic card objects in `hands[].cards`. Use each card's `rank`, `label`, and `strength` for reasoning, and retain its `id` only for action submission. Do not re-derive a face from the numeric ID. A rocket requires one `rank=small_joker` and one `rank=big_joker`. These fields are basic card information, not server-provided hand analysis or recommendations.
 7. Partition the private hand into one or two non-overlapping legal play routes and count the remaining plays for each. Mark routes that require regaining control; a minimum combination count is not a guaranteed finish by itself.

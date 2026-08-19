@@ -25,7 +25,7 @@ The local MCP server adapts game tools to the application's HTTP `agent-game.v1`
 - `seatControllers`: occupied seats and whether each is a player or Agent. Each controller has a stable `id` for reconnection and a public `displayName` for the table and replay.
 - `readySeats` and `allReady`: seats whose controllers have confirmed start, independent of merely joining.
 - `landlord`: final landlord seat during play; null while bidding is unresolved.
-- `firstCaller`: first seat that called landlord in the current deal. If a later seat robs, this seat receives one final counter-rob turn.
+- `firstCaller`: first seat that called landlord in the current deal. Seats that declined before this call are no longer eligible to rob. If an eligible later seat robs, the first caller receives one final counter-rob turn.
 - `current`: seat whose turn it is.
 - `you`: observed seat.
 - `isYourTurn`: whether this seat may act.
@@ -48,7 +48,7 @@ The local MCP server adapts game tools to the application's HTTP `agent-game.v1`
 {"type":"pass"}
 ```
 
-In bidding, `value=1` means call or rob according to `bidStage`; `value=0` means decline. After the other two seats respond, a changed `landlordCandidate` returns the turn to `firstCaller` for one final counter-rob decision. During play, use card-object semantics to decide and submit only their `id` values. For example, choose `{ "id":"14:0", "rank":"A", "label":"A♠" }` and submit `"14:0"`.
+In bidding, `value=1` means call or rob according to `bidStage`; `value=0` means decline. A seat that returns `value=0` during `call` exits landlord competition and is skipped during `rob`. After all still-eligible later seats respond, a changed `landlordCandidate` returns the turn to `firstCaller` for one final counter-rob decision. During play, use card-object semantics to decide and submit only their `id` values. For example, choose `{ "id":"14:0", "rank":"A", "label":"A♠" }` and submit `"14:0"`.
 Read [rules.md](rules.md) before selecting cards and [strategy.md](strategy.md) before choosing among legal actions.
 
 An Agent may attach a public decision summary. It is stored in the replay and visible only in the H5 global view or replay:

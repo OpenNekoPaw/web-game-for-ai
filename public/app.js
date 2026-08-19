@@ -694,12 +694,12 @@ function renderTablePlays() {
   const showBidProcess = state.phase === 'bid' && ['call', 'rob'].includes(state.bidStage);
   if (showBidProcess && state.bidHistory?.length) {
     const bidsBySeat = new Map();
-    (state.bidHistory || []).forEach((entry) => bidsBySeat.set(entry.seatId, [...(bidsBySeat.get(entry.seatId) || []), entry]));
-    bidsBySeat.forEach((entries, seatId) => {
+    (state.bidHistory || []).forEach((entry) => bidsBySeat.set(entry.seatId, entry));
+    bidsBySeat.forEach((entry, seatId) => {
       const slot = `${playerPosition(seatId)}-play`;
       const hint = document.createElement('span');
-      hint.className = `bid-hint ${entries.at(-1).value ? 'accepted' : 'declined'}`;
-      hint.textContent = entries.map((entry) => entry.stage === 'rob' ? entry.value ? '抢地主' : '不抢' : entry.value ? '叫地主' : '不叫').join(' → ');
+      hint.className = `bid-hint ${entry.value ? 'accepted' : 'declined'}`;
+      hint.textContent = entry.stage === 'rob' ? entry.value ? '抢地主' : '不抢' : entry.value ? '叫地主' : '不叫';
       $(slot).appendChild(hint);
     });
     return;
