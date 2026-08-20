@@ -10,6 +10,7 @@ const MAX_TURN_TIMEOUT_MS = 60_000;
 const INVITE_TTL_MS = 30 * 60_000;
 const PLAYER_OFFLINE_MS = 10_000;
 const WAITING_SEAT_RELEASE_MS = 60_000;
+const COMPLETED_GAME_RECOVERY_MS = 5 * 60_000;
 const ACCESS_MODES = new Set(['open', 'invite_only', 'private']);
 const configuredTurnTimeoutMs = normalizeTurnTimeout(globalThis.process?.env?.TURN_TIMEOUT_MS);
 let lastGameTimestamp = 0;
@@ -139,12 +140,25 @@ export function getMatch(gameId) {
 // Durable Object persistence boundary. The game engine remains synchronous so
 // the Node server and existing tests keep their API; the Worker serializes
 // this snapshot into Durable Object SQLite storage between requests.
-export function exportStoreState() {
-  return JSON.parse(JSON.stringify({
-    games: [...games.entries()], competitions: [...competitions.entries()],
-    invites: [...invites.entries()], lastGameTimestamp, lastCompetitionTimestamp,
-    replays: exportReplayState()
-  }, snapshotReplacer));
+export function exportStoreState(options = {}) {
+  const now = Number(options.now) || Date.now();
+  const gameEntries = options.recoverableOnly === true
+    ? [...games.entries()].filter(([, game]) => shouldPersistForRecovery(game, now))
+    : [...games.entries()];
+  const inviteEntries = [...invites.entries()].filter(([, invite]) => Number(invite.expiresAt) > now);
+  const snapshot = {
+    games: gameEntries, competitions: [...competitions.entries()],
+    invites: inviteEntries, lastGameTimestamp, lastCompetitionTimestamp
+  };
+  if (options.includeReplays !== false) snapshot.replays = exportReplayState();
+  return JSON.parse(JSON.stringify(snapshot, snapshotReplacer));
+}
+
+function shouldPersistForRecovery(game, now) {
+  if (game.phase !== 'over') return true;
+  const competition = game.competitionId ? competitions.get(game.competitionId) : null;
+  if (competition?.currentGameId === game.gameId && !['over'].includes(competition.status)) return true;
+  return now - Number(game.settlement?.settledAt || 0) < COMPLETED_GAME_RECOVERY_MS;
 }
 
 export function importStoreState(snapshot = {}) {

@@ -42,14 +42,31 @@ export class ArenaDurableObject {
   async load() {
     if (this.loaded) return;
     const snapshot = await this.state.storage.get('snapshot');
-    if (snapshot) importStoreState(JSON.parse(snapshot));
+    if (snapshot) {
+      const decoded = typeof snapshot === 'string' ? JSON.parse(snapshot) : snapshot;
+      const storedReplayEntries = this.state.storage.list
+        ? await this.state.storage.list({ prefix: 'replay:' })
+        : new Map();
+      const storedReplays = [...storedReplayEntries.values()].map((value) => typeof value === 'string' ? JSON.parse(value) : value);
+      const legacyReplays = Array.isArray(decoded.replays) ? decoded.replays : [];
+      const replays = storedReplays.length ? storedReplays : legacyReplays;
+      if (!storedReplays.length && legacyReplays.length) await this.persistReplayRecords(legacyReplays.map((replay) => ({ replay })));
+      importStoreState({ ...decoded, replays });
+    }
     this.loaded = true;
     this.lastPersistedAt = Date.now();
   }
 
+  async persistReplayRecords(entries) {
+    if (!entries.length) return;
+    const records = Object.fromEntries(entries.map(({ replay }) => [`replay:${replay.gameId}`, JSON.stringify(replay)]));
+    await this.state.storage.put(records);
+  }
+
   async persist() {
     const dirtyReplays = exportDirtyReplayState();
-    const snapshot = exportStoreState();
+    await this.persistReplayRecords(dirtyReplays);
+    const snapshot = exportStoreState({ includeReplays: false, recoverableOnly: true });
     await this.state.storage.put('snapshot', JSON.stringify(snapshot));
     if (this.env.REPLAYS) await Promise.all(dirtyReplays.map(({ replay }) => this.env.REPLAYS.put(
       `replays/${replay.gameId}.json`, JSON.stringify(replay),
