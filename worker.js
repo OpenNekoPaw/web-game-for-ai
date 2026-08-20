@@ -11,10 +11,6 @@ export default {
       const id = env.GAME_STATE.idFromName('global');
       return env.GAME_STATE.get(id).fetch(request);
     }
-    if (url.pathname.startsWith('/public/')) {
-      url.pathname = url.pathname.slice('/public'.length);
-      return env.ASSETS.fetch(new Request(url, request));
-    }
     return env.ASSETS.fetch(request);
   }
 };

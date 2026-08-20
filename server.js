@@ -32,6 +32,7 @@ const handleRequest = async (req, res) => {
     if (url.pathname === '/mcp' || url.pathname === '/agent/mcp') return await mcp(req, res);
     if (req.method === 'GET' && url.pathname === '/') { const data = await readFile(join(assetsDirectory, 'public/index.html')); res.writeHead(200, {'content-type': mime['.html']}); return res.end(data); }
     if (req.method === 'GET' && url.pathname.startsWith('/public/')) { const file = join(assetsDirectory, url.pathname); const data = await readFile(file); res.writeHead(200, {'content-type': mime[extname(file)] || 'application/octet-stream'}); return res.end(data); }
+    if (req.method === 'GET' && ['/app.js', '/cards.css', '/styles.css', '/header.css', '/lifecycle.css', '/cards-adapter.css'].includes(url.pathname)) { const file = join(assetsDirectory, 'public', url.pathname.slice(1)); const data = await readFile(file); res.writeHead(200, {'content-type': mime[extname(file)] || 'application/octet-stream'}); return res.end(data); }
     if (req.method === 'GET' && url.pathname === '/api/agent-guide') {
       const markdown = await readFile(join(assetsDirectory, '.agents', 'skills', 'play-doudizhu', 'SKILL.md'), 'utf8');
       const hash = createHash('sha256').update(markdown).digest('hex');
