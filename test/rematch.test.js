@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { cardView, createDeck } from '../game/ddz.js';
-import { appendReplayFrame, createReplay, listReplays, readReplay } from '../game/replay-store.js';
+import { appendReplayFrame, createReplay, exportReplayState, listReplays, readReplay } from '../game/replay-store.js';
 import { createRematch, getMatch, joinPlayerMatch, observeMatch, startMatch } from '../game/store.js';
 
 function replayState(gameId, phase, winner, deal = null) {
@@ -29,6 +29,13 @@ test('rematch waits for three ready seats then restores the same deal and first 
   createReplay(sourceGameId, replayState(sourceGameId, 'waiting', null));
   appendReplayFrame(sourceGameId, { type: 'started' }, replayState(sourceGameId, 'bid', null, deal));
   appendReplayFrame(sourceGameId, { type: 'action' }, replayState(sourceGameId, 'over', 'farmers', deal));
+
+  const compactReplay = exportReplayState().find((replay) => replay.gameId === sourceGameId);
+  assert.equal(compactReplay.format, 'agent-game.replay.v2');
+  assert.equal(Object.hasOwn(compactReplay, 'frames'), false);
+  assert.equal(compactReplay.entries.length, 3);
+  assert.equal(Object.hasOwn(compactReplay.entries[1], 'state'), false);
+  assert.equal(readReplay(sourceGameId).frames.length, 3);
 
   const rematch = createRematch(sourceGameId);
   assert.notEqual(rematch.gameId, sourceGameId);

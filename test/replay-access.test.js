@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import {
   createMatch,
   createMatchInvite,
+  expireInterruptedMatches,
   getAuthorizedReplay,
+  getMatch,
   joinPlayerInvite,
   listAccessibleReplays
 } from '../game/store.js';
@@ -33,4 +35,17 @@ test('an invited player receives the private replay credential', () => {
 
   assert.equal(joined.replayAccessToken, game.replayAccessToken);
   assert.equal(getAuthorizedReplay(game.gameId, joined.replayAccessToken).gameId, game.gameId);
+});
+
+test('private replay authorization survives expired activity-state removal', () => {
+  const game = createMatch({ accessMode: 'private' });
+  const token = game.replayAccessToken;
+  const expiredAt = Number(game.gameId.slice(4)) + 10 * 60_000 + 1;
+
+  assert.equal(expireInterruptedMatches(expiredAt).includes(game.gameId), true);
+  assert.equal(getMatch(game.gameId), null);
+  assert.throws(() => getAuthorizedReplay(game.gameId), /replay_access_denied/);
+  const replay = getAuthorizedReplay(game.gameId, token);
+  assert.equal(replay.frames.at(-1).state.phase, 'aborted');
+  assert.equal(Object.hasOwn(replay, 'replayAccessToken'), false);
 });

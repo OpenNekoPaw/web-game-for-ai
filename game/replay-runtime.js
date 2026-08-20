@@ -3,6 +3,7 @@
 // request; the Durable Object storage keeps the hot working set available.
 const records = new Map();
 const dirtyRecords = new Map();
+const latestStates = new Map();
 let revision = 0;
 
 function markDirty(gameId) {
@@ -10,29 +11,39 @@ function markDirty(gameId) {
   dirtyRecords.set(gameId, revision);
 }
 
-export function createReplay(gameId, state, participants = {}) {
+export function createReplay(gameId, state, participants = {}, options = {}) {
   const now = Date.now();
   records.set(gameId, {
-    format: 'agent-game.replay.v1', gameId, game: state.game,
+    format: 'agent-game.replay.v2', gameId, game: state.game,
     sourceGameId: state.sourceGameId ?? null, createdAt: now, updatedAt: now,
     completedAt: null, participants: structuredClone(participants),
-    frames: [{ index: 0, at: now, event: { type: 'created' }, state: structuredClone(state) }]
+    replayAccessToken: options.replayAccessToken || null,
+    initialState: structuredClone(state),
+    entries: [{ index: 0, at: now, event: { type: 'created' }, patch: null }]
   });
+  latestStates.set(gameId, structuredClone(state));
   markDirty(gameId);
 }
 
 export function updateReplayParticipants(gameId, participants) {
-  const replay = requireReplay(gameId);
+  const replay = ensureCompact(requireReplay(gameId));
   replay.participants = structuredClone(participants);
   replay.updatedAt = Date.now();
   markDirty(gameId);
 }
 
 export function appendReplayFrame(gameId, event, state, participants = {}) {
-  const replay = requireReplay(gameId);
+  const replay = ensureCompact(requireReplay(gameId));
   const now = Date.now();
+  const previousState = latestReplayState(replay);
   replay.participants = structuredClone(participants);
-  replay.frames.push({ index: replay.frames.length, at: now, event: structuredClone(event), state: structuredClone(state) });
+  replay.entries.push({
+    index: replay.entries.length,
+    at: now,
+    event: structuredClone(event),
+    patch: createPatch(previousState, state)
+  });
+  latestStates.set(gameId, structuredClone(state));
   replay.updatedAt = now;
   if (isCompletedState(state) && replay.completedAt === null) replay.completedAt = now;
   markDirty(gameId);
@@ -40,7 +51,21 @@ export function appendReplayFrame(gameId, event, state, participants = {}) {
 
 export function readReplay(gameId) {
   validateGameId(gameId);
-  return structuredClone(requireReplay(gameId));
+  return materializeReplay(requireReplay(gameId));
+}
+
+export function replayAccessMatches(gameId, token) {
+  const replay = requireReplay(gameId);
+  return Boolean(replay.replayAccessToken && token === replay.replayAccessToken);
+}
+
+export function bindReplayAccessToken(gameId, token) {
+  if (!token) return;
+  const replay = requireReplay(gameId);
+  if (replay.replayAccessToken === token) return;
+  if (replay.replayAccessToken) throw new Error('replay_access_token_mismatch');
+  replay.replayAccessToken = token;
+  markDirty(gameId);
 }
 
 export function listReplays(options = {}) {
@@ -81,6 +106,7 @@ export function markReplayStatePersisted(entries = []) {
 export function importReplayState(replays = []) {
   records.clear();
   for (const replay of replays) records.set(replay.gameId, structuredClone(replay));
+  latestStates.clear();
   dirtyRecords.clear();
   revision += 1;
 }
@@ -92,6 +118,83 @@ function requireReplay(gameId) {
   return replay;
 }
 
+function ensureCompact(replay) {
+  if (replay.format === 'agent-game.replay.v2' && Array.isArray(replay.entries)) return replay;
+  const frames = Array.isArray(replay.frames) ? replay.frames : [];
+  const initialState = structuredClone(frames[0]?.state || {});
+  let previousState = initialState;
+  replay.format = 'agent-game.replay.v2';
+  replay.initialState = initialState;
+  replay.entries = frames.map((frame, index) => {
+    const state = structuredClone(frame.state || previousState);
+    const entry = {
+      index,
+      at: frame.at,
+      event: structuredClone(frame.event || {}),
+      patch: index === 0 ? null : createPatch(previousState, state)
+    };
+    previousState = state;
+    return entry;
+  });
+  delete replay.frames;
+  latestStates.set(replay.gameId, structuredClone(previousState));
+  return replay;
+}
+
+function materializeReplay(replay) {
+  if (Array.isArray(replay.frames)) {
+    const { replayAccessToken, ...publicReplay } = structuredClone(replay);
+    return publicReplay;
+  }
+  let state = structuredClone(replay.initialState || {});
+  const frames = (replay.entries || []).map((entry, index) => {
+    if (index > 0 && entry.patch) state = applyPatch(state, entry.patch);
+    return { index: entry.index ?? index, at: entry.at, event: structuredClone(entry.event || {}), state: structuredClone(state) };
+  });
+  const { initialState, entries, replayAccessToken, ...metadata } = replay;
+  return { ...structuredClone(metadata), format: 'agent-game.replay.v1', frames };
+}
+
+function latestReplayState(replay) {
+  const cached = latestStates.get(replay.gameId);
+  if (cached) return structuredClone(cached);
+  const materialized = materializeReplay(replay).frames.at(-1)?.state || {};
+  latestStates.set(replay.gameId, structuredClone(materialized));
+  return materialized;
+}
+
+function createPatch(previous, next) {
+  if (Object.is(previous, next)) return null;
+  if (Array.isArray(previous) && Array.isArray(next)) {
+    return JSON.stringify(previous) === JSON.stringify(next) ? null : { value: structuredClone(next) };
+  }
+  if (isPlainObject(previous) && isPlainObject(next)) {
+    const fields = {};
+    const removed = [];
+    for (const key of Object.keys(previous)) {
+      if (!(key in next)) removed.push(key);
+    }
+    for (const [key, value] of Object.entries(next)) {
+      const patch = createPatch(previous[key], value);
+      if (patch) fields[key] = patch;
+    }
+    return Object.keys(fields).length || removed.length ? { fields, removed } : null;
+  }
+  return { value: structuredClone(next) };
+}
+
+function applyPatch(previous, patch) {
+  if (Object.hasOwn(patch, 'value')) return structuredClone(patch.value);
+  const next = isPlainObject(previous) ? structuredClone(previous) : {};
+  for (const key of patch.removed || []) delete next[key];
+  for (const [key, childPatch] of Object.entries(patch.fields || {})) next[key] = applyPatch(next[key], childPatch);
+  return next;
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
 function validateGameId(gameId) {
   if (!/^ddz-[0-9]+$/.test(gameId)) throw new Error('invalid_game_id');
 }
@@ -100,7 +203,7 @@ function isCompletedState(state) { return state?.phase === 'over' && ['landlord'
 function isCompletedSummary(summary) { return summary.completedAt !== null && isCompletedState(summary); }
 
 function replaySummary(replay) {
-  const state = replay.frames.at(-1)?.state || {};
+  const state = latestReplayState(replay);
   return {
     gameId: replay.gameId, game: replay.game,
     sourceGameId: replay.sourceGameId ?? state.sourceGameId ?? null,
@@ -114,7 +217,7 @@ function replaySummary(replay) {
       multiplierReasons: [...(state.settlement.multiplierReasons || [])],
       scoreDelta: [...(state.settlement.scoreDelta || [])]
     } : null,
-    frameCount: replay.frames.length,
+    frameCount: Array.isArray(replay.entries) ? replay.entries.length : replay.frames.length,
     participants: Object.fromEntries(Object.entries(replay.participants || {}).map(([seatId, participant]) => [seatId, {
       type: participant.type, id: participant.id, displayName: participant.displayName,
       agentMetadata: participant.agentMetadata ? structuredClone(participant.agentMetadata) : undefined,
