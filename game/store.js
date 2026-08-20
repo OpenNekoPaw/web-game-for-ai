@@ -1,7 +1,6 @@
 import { applyAction, chooseSimpleAction, createDeck, createGame, publicState, startGame } from './ddz.js';
-import { randomBytes } from 'node:crypto';
-import { appendReplayFrame, createReplay, readReplay, updateReplayParticipants } from './replay-store.js';
-import { getStrategy, listStrategies } from './strategy-store.js';
+import { appendReplayFrame, createReplay, exportReplayState, importReplayState, readReplay, updateReplayParticipants } from './replay-runtime.js';
+import { getStrategy, listStrategies } from './strategy-runtime.js';
 
 const games = new Map();
 const competitions = new Map();
@@ -9,7 +8,7 @@ const invites = new Map();
 const DEFAULT_TURN_TIMEOUT_MS = 60_000;
 const MAX_TURN_TIMEOUT_MS = 60_000;
 const INVITE_TTL_MS = 30 * 60_000;
-const configuredTurnTimeoutMs = normalizeTurnTimeout(process.env.TURN_TIMEOUT_MS);
+const configuredTurnTimeoutMs = normalizeTurnTimeout(globalThis.process?.env?.TURN_TIMEOUT_MS);
 let lastGameTimestamp = 0;
 let lastCompetitionTimestamp = 0;
 
@@ -114,6 +113,40 @@ export function getMatch(gameId) {
   return games.get(gameId) || null;
 }
 
+// Durable Object persistence boundary. The game engine remains synchronous so
+// the Node server and existing tests keep their API; the Worker serializes
+// this snapshot into Durable Object SQLite storage between requests.
+export function exportStoreState() {
+  return JSON.parse(JSON.stringify({
+    games: [...games.entries()], competitions: [...competitions.entries()],
+    invites: [...invites.entries()], lastGameTimestamp, lastCompetitionTimestamp,
+    replays: exportReplayState()
+  }, snapshotReplacer));
+}
+
+export function importStoreState(snapshot = {}) {
+  const decoded = JSON.parse(JSON.stringify(snapshot), snapshotReviver);
+  games.clear(); competitions.clear(); invites.clear();
+  for (const [id, game] of decoded.games || []) games.set(id, game);
+  for (const [id, competition] of decoded.competitions || []) competitions.set(id, competition);
+  for (const [id, invite] of decoded.invites || []) invites.set(id, invite);
+  lastGameTimestamp = decoded.lastGameTimestamp || 0;
+  lastCompetitionTimestamp = decoded.lastCompetitionTimestamp || 0;
+  importReplayState(decoded.replays || []);
+}
+
+function snapshotReplacer(key, value) {
+  if (value instanceof Map) return { __ddzType: 'Map', value: [...value.entries()] };
+  if (value instanceof Set) return { __ddzType: 'Set', value: [...value.values()] };
+  return value;
+}
+
+function snapshotReviver(key, value) {
+  if (value?.__ddzType === 'Map') return new Map(value.value);
+  if (value?.__ddzType === 'Set') return new Set(value.value);
+  return value;
+}
+
 export function joinMatch(gameId, seatId, agentId, strategyId, displayName, options = {}) {
   const game = requireMatch(gameId);
   validateSeat(seatId);
@@ -148,7 +181,7 @@ export function createMatchInvite(gameId, inviteType, seatId = 0) {
   const now = Date.now();
   pruneExpiredInvites(now);
   const invite = {
-    token: randomBytes(24).toString('base64url'),
+    token: crypto.randomUUID().replaceAll('-', ''),
     inviteType,
     gameId,
     seatId: normalizedSeat,

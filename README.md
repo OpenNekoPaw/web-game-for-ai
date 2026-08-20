@@ -20,6 +20,20 @@ npm start
 npm test
 ```
 
+## Cloudflare Worker + R2
+
+完整 Cloudflare 部署使用官方 Wrangler、Durable Objects 和 R2：
+
+```bash
+npx wrangler login
+npx wrangler r2 bucket create agent-game-ddz-replays
+npm run deploy:cloudflare
+```
+
+`wrangler.jsonc` 已配置 `GAME_STATE` Durable Object 和 `REPLAYS` R2 binding。Durable Object SQLite storage 保存牌局、邀请、比赛和热状态；R2 保存回放 JSON。Worker API、MCP 和 H5 页面均由同一 Worker 提供。
+
+本项目不需要 D1 或 KV：D1 适合后续增加复杂历史查询、统计报表时再引入；KV 只适合缓存或低一致性配置，不能作为牌局主状态。API token 只需要通过 Wrangler 登录或 Cloudflare 控制台授权，不放进 Worker 代码。
+
 ## Linux 二进制
 
 从 GitHub Releases 下载与服务器架构对应的发布包：

@@ -9,6 +9,8 @@
   "scripts": {
     "start": "node scripts/supervise-server.js",
     "start:once": "node server.js",
+    "dev:cloudflare": "npx wrangler dev",
+    "deploy:cloudflare": "npx wrangler deploy",
     "build:binary": "bash scripts/build-binary.sh",
     "test:binary": "bash scripts/test-binary.sh",
     "test": "REPLAY_PERSISTENCE=memory node --test"

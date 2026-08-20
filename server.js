@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { createCompetition, createMatch, createMatchInvite, createRematch, getMatch, getMatchStrategies, getReplay, getStrategies, joinAgentInvite, joinMatch, joinPlayerInvite, joinPlayerMatch, observeCompetition, observeMatch, resolveMatchInvite, startMatch, submitCompetitionReview, submitMatchAction, submitMatchReview, tickMatches } from './game/store.js';
-import { listReplays } from './game/replay-store.js';
+import { listReplays } from './game/replay-runtime.js';
 import { assetsDirectory } from './game/runtime-paths.js';
 import { handleMcpMessage } from './server/mcp.js';
 
