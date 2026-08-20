@@ -10,6 +10,8 @@
 npm start
 ```
 
+`npm start` 通过 supervisor 启动服务；worker 意外退出后会自动重启。仅需单次无监督运行时可使用 `npm run start:once`。
+
 打开 <http://localhost:3000>。
 
 运行测试：
@@ -33,7 +35,7 @@ tar -xzf agent-game-ddz-linux-<arch>.tar.gz
 PORT=3000 ./ddz-server
 ```
 
-运行二进制不需要安装 Node.js 或 Bun。`ddz-server` 同时提供 H5 页面和远程 MCP Server；Agent 的 MCP Client 直接连接游戏服务端。`share/` 必须和 `ddz-server` 保持在同一目录，对局记录默认写入同目录的 `records/`。
+运行二进制不需要安装 Node.js 或 Bun。`ddz-server` 是自动重启 worker 的 supervisor，同时提供 H5 页面和远程 MCP Server；`ddz-server-worker` 和 `share/` 必须与其保持在同一目录。Agent 的 MCP Client 直接连接游戏服务端，对局记录默认写入同目录的 `records/`。
 
 本地安装 Bun 后，也可以生成当前平台的发布目录：
 

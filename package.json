@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node server.js",
+    "start": "node scripts/supervise-server.js",
+    "start:once": "node server.js",
     "build:binary": "bash scripts/build-binary.sh",
     "test:binary": "bash scripts/test-binary.sh",
     "test": "REPLAY_PERSISTENCE=memory node --test"

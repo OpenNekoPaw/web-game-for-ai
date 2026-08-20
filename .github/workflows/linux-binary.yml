@@ -63,6 +63,7 @@ jobs:
         run: |
           file "$BINARY_PATH"
           file "$BINARY_PATH" | grep -q 'ELF 64-bit'
+          file "${BINARY_PATH}-worker" | grep -q 'ELF 64-bit'
           test ! -e "${{ runner.temp }}/ddz-dist/server.js"
           test ! -d "${{ runner.temp }}/ddz-dist/game"
 
@@ -76,7 +77,7 @@ jobs:
           DIST_DIR: ${{ runner.temp }}/ddz-dist
           ARTIFACT: agent-game-ddz-linux-${{ matrix.arch }}
         run: |
-          tar -C "$DIST_DIR" -czf "$RUNNER_TEMP/$ARTIFACT.tar.gz" ddz-server share
+          tar -C "$DIST_DIR" -czf "$RUNNER_TEMP/$ARTIFACT.tar.gz" ddz-server ddz-server-worker share
           cd "$RUNNER_TEMP"
           sha256sum "$ARTIFACT.tar.gz" > "$ARTIFACT.sha256"
 

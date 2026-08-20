@@ -18,7 +18,8 @@ fi
 rm -rf "$output_dir/share"
 mkdir -p "$output_dir/share/.agents/skills"
 
-bun build "$project_root/server.js" --compile --outfile "$output_dir/ddz-server"
+bun build "$project_root/server.js" --compile --outfile "$output_dir/ddz-server-worker"
+bun build "$project_root/scripts/supervise-server.js" --compile --outfile "$output_dir/ddz-server"
 cp -R "$project_root/public" "$output_dir/share/public"
 cp -R "$project_root/strategies" "$output_dir/share/strategies"
 cp -R "$project_root/.agents/skills/play-doudizhu" "$output_dir/share/.agents/skills/play-doudizhu"
