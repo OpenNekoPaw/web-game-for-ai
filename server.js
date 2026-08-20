@@ -51,7 +51,7 @@ const handleRequest = async (req, res) => {
     if (agentInvite) {
       try {
         if (req.method === 'GET' && !agentInvite[2]) return json(res, 200, resolveMatchInvite(agentInvite[1]));
-        if (req.method === 'POST' && agentInvite[2] === 'join') { const data = await body(req); return json(res, 200, joinAgentInvite(agentInvite[1], data.agentId, data.displayName)); }
+        if (req.method === 'POST' && agentInvite[2] === 'join') { const data = await body(req); return json(res, 200, joinAgentInvite(agentInvite[1], data.agentId, data.displayName, data.agentMetadata)); }
       } catch (error) { return json(res, error.message === 'invite_not_found' ? 404 : 400, { protocol:'agent-game.v1', ok:false, error:error.message }); }
     }
     if (req.method === 'POST' && (url.pathname === '/api/competitions' || url.pathname === '/agent/v1/competitions')) return json(res, 201, createCompetition(await body(req)));
@@ -76,13 +76,13 @@ const handleRequest = async (req, res) => {
       try { await body(req); const game = createRematch(replayRematch[1]); return json(res, 201, { protocol:'agent-game.v1', gameId:game.gameId, sourceGameId:game.sourceGameId, turnTimeoutMs:game.turnTimeoutMs }); }
       catch (error) { return json(res, error.message === 'replay_not_found' ? 404 : 400, { error:error.message }); }
     }
-    if (req.method === 'POST' && (url.pathname === '/api/games' || url.pathname === '/agent/v1/games')) { const data = await body(req); const game = createMatch(data); return json(res, 201, { protocol:'agent-game.v1', gameId: game.gameId, turnTimeoutMs: game.turnTimeoutMs }); }
+    if (req.method === 'POST' && (url.pathname === '/api/games' || url.pathname === '/agent/v1/games')) { const data = await body(req); const game = createMatch(data); return json(res, 201, { protocol:'agent-game.v1', gameId: game.gameId, accessMode: game.accessMode, turnTimeoutMs: game.turnTimeoutMs }); }
     const agentMatch = url.pathname.match(/^\/agent\/v1\/games\/([^/]+)\/(join|observe|start|actions|review)$/);
     if (agentMatch) {
       const data = req.method === 'POST' ? await body(req) : {};
       const seatId = Number(req.method === 'GET' ? url.searchParams.get('seatId') : data.seatId);
       try {
-        if (agentMatch[2] === 'join' && req.method === 'POST') return json(res, 200, joinMatch(agentMatch[1], seatId, String(data.agentId || 'anonymous'), data.strategyId, data.displayName, { strategyMode:data.strategyMode }));
+        if (agentMatch[2] === 'join' && req.method === 'POST') return json(res, 200, joinMatch(agentMatch[1], seatId, String(data.agentId || 'anonymous'), data.strategyId, data.displayName, { strategyMode:data.strategyMode, agentMetadata:data.agentMetadata }));
         if (agentMatch[2] === 'observe' && req.method === 'GET') return json(res, 200, observeMatch(agentMatch[1], seatId));
         if (agentMatch[2] === 'start' && req.method === 'POST') return json(res, 200, startMatch(agentMatch[1], seatId));
         if (agentMatch[2] === 'actions' && req.method === 'POST') return json(res, 200, submitMatchAction(agentMatch[1], seatId, data.action, data.seq, { source:'agent', decision:data.decision }));

@@ -15,29 +15,49 @@ import {
 } from '../game/store.js';
 
 const text = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }], structuredContent: value });
+const accessProperties = {
+  accessMode: { type: 'string', enum: ['open', 'invite_only', 'private'] },
+  allowedAgentIds: { type: 'array', maxItems: 100, items: { type: 'string', minLength: 1, maxLength: 120 } },
+  allowedPlayerIds: { type: 'array', maxItems: 100, items: { type: 'string', minLength: 1, maxLength: 120 } }
+};
+const agentMetadataSchema = {
+  type: 'object',
+  properties: {
+    modelId: { type: 'string', minLength: 1, maxLength: 120 },
+    reasoningEffort: { type: 'string', minLength: 1, maxLength: 40 },
+    provider: { type: 'string', minLength: 1, maxLength: 80 },
+    clientVersion: { type: 'string', minLength: 1, maxLength: 80 },
+    strategyId: { type: 'string', minLength: 1, maxLength: 120 },
+    strategyVersion: { type: 'string', minLength: 1, maxLength: 120 },
+    strategyHash: { type: 'string', minLength: 1, maxLength: 128 }
+  },
+  additionalProperties: false
+};
 
 export const MCP_TOOLS = [
   tool('list_strategies', 'List optional server-catalog strategies. Local strategy files remain with the Agent.', {}),
-  tool('create_game', 'Create a random Dou Dizhu game.', { properties: {}, additionalProperties: false }),
+  tool('create_game', 'Create a random Dou Dizhu game. accessMode defaults to open.', { properties: accessProperties, additionalProperties: false }),
   tool('create_rematch', 'Create a new game using the initial deal from a completed game.', {
     properties: { sourceGameId: { type: 'string' } }, required: ['sourceGameId']
   }),
   tool('create_competition', 'Create a 3, 5, or 7-round Dou Dizhu competition.', {
-    properties: { totalRounds: { type: 'integer', enum: [3, 5, 7] } }, additionalProperties: false
+    properties: { totalRounds: { type: 'integer', enum: [3, 5, 7] }, ...accessProperties }, additionalProperties: false
   }),
   tool('join_invite', 'Join an Agent invitation. The token selects this server, game, and seat; strategy stays with the Agent.', {
     properties: {
       inviteToken: { type: 'string', description: 'Token from the Agent invitation URL.' },
       inviteUrl: { type: 'string', description: 'Full Agent invitation URL; the final path segment is used as the token.' },
       agentId: { type: 'string', minLength: 1, maxLength: 120 },
-      displayName: { type: 'string', minLength: 1, maxLength: 40 }
+      displayName: { type: 'string', minLength: 1, maxLength: 40 },
+      agentMetadata: agentMetadataSchema
     }, required: ['agentId'], additionalProperties: false
   }),
   tool('join_game', 'Claim or reconnect to one Agent seat. Use strategyMode=local when the Agent owns its strategy.', {
     properties: {
       gameId: { type: 'string' }, seatId: { type: 'integer', minimum: 0, maximum: 2 },
       agentId: { type: 'string' }, displayName: { type: 'string', minLength: 1, maxLength: 40 },
-      strategyMode: { type: 'string', enum: ['local', 'server'] }, strategyId: { type: 'string' }
+      strategyMode: { type: 'string', enum: ['local', 'server'] }, strategyId: { type: 'string' },
+      agentMetadata: agentMetadataSchema
     }, required: ['gameId', 'seatId', 'agentId'], additionalProperties: false
   }),
   tool('observe_game', 'Read the private observation visible to one Agent seat.', {
@@ -99,7 +119,7 @@ async function callTool(name, args) {
     case 'list_strategies': return text({ protocol: 'agent-game.v1', ...getStrategies() });
     case 'create_game': {
       const game = createMatch(args);
-      return text({ protocol: 'agent-game.v1', gameId: game.gameId, turnTimeoutMs: game.turnTimeoutMs });
+      return text({ protocol: 'agent-game.v1', gameId: game.gameId, accessMode: game.accessMode, turnTimeoutMs: game.turnTimeoutMs });
     }
     case 'create_rematch': {
       const game = createRematch(args.sourceGameId);
@@ -108,12 +128,12 @@ async function callTool(name, args) {
     case 'create_competition': return text(createCompetition(args));
     case 'join_invite': {
       const token = inviteToken(args.inviteToken || args.inviteUrl);
-      return text(joinAgentInvite(token, args.agentId, args.displayName));
+      return text(joinAgentInvite(token, args.agentId, args.displayName, args.agentMetadata));
     }
     case 'join_game': {
       const strategyMode = args.strategyMode || 'local';
       const strategyId = strategyMode === 'server' ? args.strategyId : undefined;
-      return text(joinMatch(args.gameId, args.seatId, args.agentId, strategyId, args.displayName, { strategyMode }));
+      return text(joinMatch(args.gameId, args.seatId, args.agentId, strategyId, args.displayName, { strategyMode, agentMetadata: args.agentMetadata }));
     }
     case 'observe_game': return text(observeMatch(args.gameId, args.seatId));
     case 'start_game': return text(startMatch(args.gameId, args.seatId));

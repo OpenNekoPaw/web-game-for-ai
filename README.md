@@ -53,3 +53,8 @@ http://localhost:3000/?replay=<gameId>&view=global
 ```
 
 MCP 地址：`http://127.0.0.1:3000/mcp`。
+
+协议与设计文档：
+
+- [Agent 接入协议](docs/agent-protocol.md)
+- [模型、推理强度、策略评估与主持 Agent](docs/evaluation-and-host-agent.md)

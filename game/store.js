@@ -8,15 +8,20 @@ const invites = new Map();
 const DEFAULT_TURN_TIMEOUT_MS = 60_000;
 const MAX_TURN_TIMEOUT_MS = 60_000;
 const INVITE_TTL_MS = 30 * 60_000;
+const ACCESS_MODES = new Set(['open', 'invite_only', 'private']);
 const configuredTurnTimeoutMs = normalizeTurnTimeout(globalThis.process?.env?.TURN_TIMEOUT_MS);
 let lastGameTimestamp = 0;
 let lastCompetitionTimestamp = 0;
 
 export function createMatch(options = {}) {
   const game = createGame(nextGameId());
+  game.accessMode = normalizeAccessMode(options.accessMode);
+  game.allowedAgentIds = normalizeIdentitySet(options.allowedAgentIds);
+  game.allowedPlayerIds = normalizeIdentitySet(options.allowedPlayerIds);
   game.agents = new Map();
   game.players = new Map();
   game.displayNames = new Map();
+  game.agentMetadata = new Map();
   game.ready = new Set();
   game.decisions = [];
   game.actionHistory = [];
@@ -38,6 +43,9 @@ export function createMatch(options = {}) {
 
 export function createCompetition(options = {}) {
   const totalRounds = normalizeTotalRounds(options.totalRounds);
+  const accessMode = normalizeAccessMode(options.accessMode);
+  const allowedAgentIds = [...normalizeIdentitySet(options.allowedAgentIds)];
+  const allowedPlayerIds = [...normalizeIdentitySet(options.allowedPlayerIds)];
   const competitionId = nextCompetitionId();
   const competition = {
     competitionId,
@@ -51,10 +59,13 @@ export function createCompetition(options = {}) {
     reviews: new Map(),
     createdAt: Date.now(),
     completedAt: null,
+    accessMode,
+    allowedAgentIds,
+    allowedPlayerIds,
     turnTimeoutMs: normalizeTurnTimeout(options.turnTimeoutMs ?? configuredTurnTimeoutMs)
   };
   competitions.set(competitionId, competition);
-  const game = createMatch({ competitionId, roundNumber: 1, turnTimeoutMs: competition.turnTimeoutMs });
+  const game = createMatch({ competitionId, roundNumber: 1, turnTimeoutMs: competition.turnTimeoutMs, accessMode, allowedAgentIds, allowedPlayerIds });
   competition.currentGameId = game.gameId;
   competition.gameIds.push(game.gameId);
   return observeCompetition(competitionId);
@@ -82,6 +93,7 @@ export function observeCompetition(competitionId, seatId = null, options = {}) {
     totalRounds: competition.totalRounds,
     currentRound: competition.currentRound,
     currentGameId: competition.currentGameId,
+    accessMode: competition.accessMode || currentGame?.accessMode || 'open',
     gameIds: [...competition.gameIds],
     status: competition.status,
     scores: [...competition.scores],
@@ -127,7 +139,7 @@ export function exportStoreState() {
 export function importStoreState(snapshot = {}) {
   const decoded = JSON.parse(JSON.stringify(snapshot), snapshotReviver);
   games.clear(); competitions.clear(); invites.clear();
-  for (const [id, game] of decoded.games || []) games.set(id, game);
+  for (const [id, game] of decoded.games || []) games.set(id, hydrateGame(game));
   for (const [id, competition] of decoded.competitions || []) competitions.set(id, competition);
   for (const [id, invite] of decoded.invites || []) invites.set(id, invite);
   lastGameTimestamp = decoded.lastGameTimestamp || 0;
@@ -150,14 +162,25 @@ function snapshotReviver(key, value) {
 export function joinMatch(gameId, seatId, agentId, strategyId, displayName, options = {}) {
   const game = requireMatch(gameId);
   validateSeat(seatId);
+  assertSeatAdmission(game, 'agent', agentId, options.viaInvite === true);
   if (game.players.has(seatId)) throw new Error('seat_occupied');
   const occupant = game.agents.get(seatId);
   if (occupant && occupant !== agentId) throw new Error('seat_occupied');
+  const metadata = options.agentMetadata === undefined
+    ? game.agentMetadata.get(seatId)
+    : normalizeAgentMetadata(options.agentMetadata);
+  if ((game.ready.has(seatId) || game.phase !== 'waiting') && options.agentMetadata !== undefined && !sameMetadata(game.agentMetadata.get(seatId), metadata)) {
+    throw new Error('agent_metadata_locked');
+  }
   const resolvedDisplayName = game.displayNames.has(seatId) && displayName === undefined
     ? game.displayNames.get(seatId)
     : normalizeDisplayName(displayName, agentId);
   game.agents.set(seatId, agentId);
   game.displayNames.set(seatId, resolvedDisplayName);
+  if (options.agentMetadata !== undefined) {
+    if (metadata) game.agentMetadata.set(seatId, metadata);
+    else game.agentMetadata.delete(seatId);
+  }
   if (options.strategyMode === 'local') {
     if (game.agentStrategies.has(seatId)) throw new Error('strategy_mismatch');
     game.localStrategySeats.add(seatId);
@@ -198,11 +221,11 @@ export function resolveMatchInvite(token) {
   return publicInvite(requireInvite(token));
 }
 
-export function joinAgentInvite(token, agentId, displayName) {
+export function joinAgentInvite(token, agentId, displayName, agentMetadata) {
   const invite = requireInvite(token, 'agent');
   const identity = normalizeInviteIdentity(agentId, 'anonymous');
   assertInviteIdentity(invite, identity);
-  const result = joinMatch(invite.gameId, invite.seatId, identity, undefined, displayName, { strategyMode: 'local' });
+  const result = joinMatch(invite.gameId, invite.seatId, identity, undefined, displayName, { strategyMode: 'local', viaInvite: true, agentMetadata });
   invite.usedBy ||= identity;
   return { invite: publicInvite(invite), ...result };
 }
@@ -211,14 +234,15 @@ export function joinPlayerInvite(token, playerId, displayName) {
   const invite = requireInvite(token, 'player');
   const identity = normalizeInviteIdentity(playerId, `h5-player-${invite.seatId}`);
   assertInviteIdentity(invite, identity);
-  const result = joinPlayerMatch(invite.gameId, invite.seatId, identity, displayName);
+  const result = joinPlayerMatch(invite.gameId, invite.seatId, identity, displayName, { viaInvite: true });
   invite.usedBy ||= identity;
   return { invite: publicInvite(invite), ...result };
 }
 
-export function joinPlayerMatch(gameId, seatId, playerId, displayName) {
+export function joinPlayerMatch(gameId, seatId, playerId, displayName, options = {}) {
   const game = requireMatch(gameId);
   validateSeat(seatId);
+  assertSeatAdmission(game, 'player', playerId, options.viaInvite === true);
   if (game.agents.has(seatId)) throw new Error('seat_occupied');
   const occupant = game.players.get(seatId);
   if (occupant && occupant !== playerId) throw new Error('seat_occupied');
@@ -257,7 +281,7 @@ export function observeMatch(gameId, seatId, options = {}) {
     : [{ type: 'play', cards: 'select from your hand' }, ...(game.lastPlay ? [{ type: 'pass' }] : [])];
   const readySeats = [...game.ready].sort();
   const reviewContext = game.phase === 'over' && game.agents.has(seatId) ? buildReviewContext(game, seatId) : null;
-  return { protocol: 'agent-game.v1', ...publicState(game, seatId, options.revealAll === true), view: options.revealAll === true ? 'global' : 'player', you: seatId, roleContext: roleContext(game, seatId), isYourTurn, allowedActions, agentSeats: Object.fromEntries(game.agents), playerSeats: Object.fromEntries(game.players), seatControllers: seatControllers(game), readySeats, allReady: readySeats.length === 3, settlement: structuredClone(game.settlement), competition: game.competitionId ? competitionStateForGame(game, seatId, options.revealAll === true) : null, strategy: game.agentStrategies.has(seatId) ? structuredClone(game.agentStrategies.get(seatId)) : null, strategyAssignments: options.revealAll === true ? strategyAssignments(game) : {}, decisions: options.revealAll === true ? structuredClone(game.decisions) : [], reviews: options.revealAll === true ? reviews(game) : game.reviews.has(seatId) ? { [seatId]: structuredClone(game.reviews.get(seatId)) } : {}, reviewStatus: reviewStatus(game), reviewContext, turnTimeoutMs: game.turnTimeoutMs, turnStartedAt: game.turnStartedAt, turnDeadlineAt: game.turnDeadlineAt, serverNow: Date.now() };
+  return { protocol: 'agent-game.v1', ...publicState(game, seatId, options.revealAll === true), accessMode: game.accessMode, view: options.revealAll === true ? 'global' : 'player', you: seatId, roleContext: roleContext(game, seatId), isYourTurn, allowedActions, agentSeats: Object.fromEntries(game.agents), playerSeats: Object.fromEntries(game.players), seatControllers: seatControllers(game), readySeats, allReady: readySeats.length === 3, settlement: structuredClone(game.settlement), competition: game.competitionId ? competitionStateForGame(game, seatId, options.revealAll === true) : null, strategy: game.agentStrategies.has(seatId) ? structuredClone(game.agentStrategies.get(seatId)) : null, strategyAssignments: options.revealAll === true ? strategyAssignments(game) : {}, decisions: options.revealAll === true ? structuredClone(game.decisions) : [], reviews: options.revealAll === true ? reviews(game) : game.reviews.has(seatId) ? { [seatId]: structuredClone(game.reviews.get(seatId)) } : {}, reviewStatus: reviewStatus(game), reviewContext, turnTimeoutMs: game.turnTimeoutMs, turnStartedAt: game.turnStartedAt, turnDeadlineAt: game.turnDeadlineAt, serverNow: Date.now() };
 }
 
 export function getMatchStrategies(gameId) {
@@ -410,6 +434,7 @@ function replayState(game, now = Date.now()) {
   return {
     protocol: 'agent-game.v1',
     ...publicState(game, null, true),
+    accessMode: game.accessMode,
     view: 'global',
     you: null,
     roleContext: null,
@@ -477,7 +502,12 @@ function occupiedSeats(game) {
 
 function seatControllers(game) {
   return Object.fromEntries(occupiedSeats(game).map((seatId) => [seatId, game.agents.has(seatId)
-    ? { type: 'agent', id: game.agents.get(seatId), displayName: game.displayNames?.get(seatId) || game.agents.get(seatId) }
+    ? {
+        type: 'agent',
+        id: game.agents.get(seatId),
+        displayName: game.displayNames?.get(seatId) || game.agents.get(seatId),
+        ...(game.agentMetadata?.has(seatId) ? { agentMetadata: structuredClone(game.agentMetadata.get(seatId)) } : {})
+      }
     : { type: 'player', id: game.players.get(seatId), displayName: game.displayNames?.get(seatId) || `玩家 ${['A', 'B', 'C'][seatId]}` }]));
 }
 
@@ -613,10 +643,18 @@ function advanceCompetitionAfterRound(game) {
     return;
   }
   const nextRound = game.roundNumber + 1;
-  const nextGame = createMatch({ competitionId: competition.competitionId, roundNumber: nextRound, turnTimeoutMs: competition.turnTimeoutMs });
+  const nextGame = createMatch({
+    competitionId: competition.competitionId,
+    roundNumber: nextRound,
+    turnTimeoutMs: competition.turnTimeoutMs,
+    accessMode: competition.accessMode,
+    allowedAgentIds: competition.allowedAgentIds,
+    allowedPlayerIds: competition.allowedPlayerIds
+  });
   nextGame.agents = new Map(game.agents);
   nextGame.players = new Map(game.players);
   nextGame.displayNames = new Map(game.displayNames);
+  nextGame.agentMetadata = new Map([...game.agentMetadata].map(([seatId, metadata]) => [seatId, structuredClone(metadata)]));
   nextGame.agentStrategies = new Map([...game.agentStrategies].map(([seatId, strategy]) => [seatId, structuredClone(strategy)]));
   nextGame.localStrategySeats = new Set(game.localStrategySeats);
   updateReplayParticipants(nextGame.gameId, participants(nextGame));
@@ -633,6 +671,7 @@ function competitionStateForGame(game, seatId = null, revealAll = false) {
     totalRounds: competition.totalRounds,
     currentRound: competition.currentRound,
     currentGameId: competition.currentGameId,
+    accessMode: competition.accessMode || game.accessMode || 'open',
     status: competition.status,
     scores: [...competition.scores],
     rounds: competitionRounds(competition, seatId, revealAll),
@@ -731,6 +770,62 @@ function normalizeTotalRounds(value) {
   const rounds = Number(value ?? 3);
   if (![3, 5, 7].includes(rounds)) throw new Error('invalid_total_rounds');
   return rounds;
+}
+
+function normalizeAccessMode(value) {
+  const mode = value === undefined || value === null ? 'open' : String(value).trim();
+  if (!ACCESS_MODES.has(mode)) throw new Error('invalid_access_mode');
+  return mode;
+}
+
+function normalizeIdentitySet(value) {
+  if (value === undefined || value === null) return new Set();
+  if (!Array.isArray(value) || value.length > 100) throw new Error('invalid_access_list');
+  return new Set(value.map((identity) => normalizeInviteIdentity(identity, '')));
+}
+
+function assertSeatAdmission(game, controllerType, identity, viaInvite) {
+  if (viaInvite || game.accessMode === 'open' || game.accessMode === undefined) return;
+  if (game.accessMode === 'invite_only') throw new Error('invite_required');
+  const allowed = controllerType === 'agent' ? game.allowedAgentIds : game.allowedPlayerIds;
+  if (!allowed?.has(String(identity))) throw new Error('access_denied');
+}
+
+function normalizeAgentMetadata(value) {
+  if (value === null) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid_agent_metadata');
+  const fields = {
+    modelId: normalizeOptionalMetadataText(value.modelId, 120),
+    reasoningEffort: normalizeOptionalMetadataText(value.reasoningEffort, 40),
+    provider: normalizeOptionalMetadataText(value.provider, 80),
+    clientVersion: normalizeOptionalMetadataText(value.clientVersion, 80),
+    strategyId: normalizeOptionalMetadataText(value.strategyId, 120),
+    strategyVersion: normalizeOptionalMetadataText(value.strategyVersion, 120),
+    strategyHash: normalizeOptionalMetadataText(value.strategyHash, 128)
+  };
+  const metadata = Object.fromEntries(Object.entries(fields).filter(([, field]) => field !== null));
+  if (!Object.keys(metadata).length) throw new Error('invalid_agent_metadata');
+  return { source: 'declared', ...metadata };
+}
+
+function normalizeOptionalMetadataText(value, maxLength) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string') throw new Error('invalid_agent_metadata');
+  const text = value.trim();
+  if (!text || text.length > maxLength) throw new Error('invalid_agent_metadata');
+  return text;
+}
+
+function sameMetadata(left, right) {
+  return JSON.stringify(left || null) === JSON.stringify(right || null);
+}
+
+function hydrateGame(game) {
+  game.accessMode = normalizeAccessMode(game.accessMode);
+  game.allowedAgentIds = game.allowedAgentIds instanceof Set ? game.allowedAgentIds : normalizeIdentitySet(game.allowedAgentIds);
+  game.allowedPlayerIds = game.allowedPlayerIds instanceof Set ? game.allowedPlayerIds : normalizeIdentitySet(game.allowedPlayerIds);
+  game.agentMetadata = game.agentMetadata instanceof Map ? game.agentMetadata : new Map();
+  return game;
 }
 
 function normalizeDisplayName(value, fallback) {

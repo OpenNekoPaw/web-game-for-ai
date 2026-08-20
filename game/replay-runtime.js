@@ -73,6 +73,7 @@ function replaySummary(replay) {
     gameId: replay.gameId, game: replay.game,
     sourceGameId: replay.sourceGameId ?? state.sourceGameId ?? null,
     createdAt: replay.createdAt, updatedAt: replay.updatedAt, completedAt: replay.completedAt,
+    accessMode: state.accessMode || 'open',
     phase: state.phase || 'waiting', winner: state.winner ?? null,
     landlord: state.landlord ?? null,
     settlement: state.settlement ? {
@@ -84,6 +85,7 @@ function replaySummary(replay) {
     frameCount: replay.frames.length,
     participants: Object.fromEntries(Object.entries(replay.participants || {}).map(([seatId, participant]) => [seatId, {
       type: participant.type, id: participant.id, displayName: participant.displayName,
+      agentMetadata: participant.agentMetadata ? structuredClone(participant.agentMetadata) : undefined,
       strategy: participant.strategy ? {
         id: participant.strategy.id, name: participant.strategy.name,
         updatedAt: participant.strategy.updatedAt, hash: participant.strategy.hash

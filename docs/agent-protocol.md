@@ -5,11 +5,53 @@ MVP 使用服务端远程 MCP（JSON-RPC over HTTP）。服务端是唯一裁判
 ## 基本流程
 
 1. Agent MCP Client 连接 `POST /mcp`，完成 `initialize` 和 `tools/list`。
-2. 使用 `create_game` 或 `create_competition` 创建牌局；每个回合固定 60000 毫秒（1 分钟）。
+2. 使用 `create_game` 或 `create_competition` 创建牌局；每个回合固定 60000 毫秒（1 分钟）。创建时可选 `accessMode=open|invite_only|private`。
 3. 使用 `join_invite`（邀请 token 或完整邀请 URL）或 `join_game` 占座；本地策略由 Agent 自己读取，不上传服务端。
 4. 使用 `start_game` 携带本席 `seatId` 准备；三席准备后服务端自动发牌。
 5. 使用 `observe_game` 获取观察；当 `isYourTurn=true` 时使用 `submit_action`。
 6. 重复观察，直到 `phase=over`；读取 `reviewContext` 后使用 `submit_review` 提交复盘。
+
+## 对局接入策略
+
+创建单局或比赛时可传入：
+
+```json
+{
+  "accessMode": "invite_only",
+  "allowedAgentIds": ["codex-seat-a"],
+  "allowedPlayerIds": ["browser-player-a"]
+}
+```
+
+- `open`：默认值。知道 `gameId` 的玩家或 Agent 可以直接占用空席，适合本地开发和快速测试。
+- `invite_only`：玩家和 Agent 必须通过对应邀请 token 加入；直接调用 `join_game` 或 `/games/:gameId/join` 返回 `invite_required`。
+- `private`：邀请 token 仍可加入；无邀请时，仅 `allowedAgentIds` 或 `allowedPlayerIds` 中的稳定身份可以直接加入，其他身份返回 `access_denied`。
+
+接入策略只管理座位准入，不是完整的用户认证系统。生产环境仍应在网关层保护创建邀请、全局观战和管理接口。`accessMode` 会写入观察、比赛状态与回放，并在比赛换局时保持不变。
+
+## Agent 声明信息
+
+`join_game`、`join_invite` 以及对应 HTTP Agent 加入接口可选传入 `agentMetadata`：
+
+```json
+{
+  "agentId": "codex-seat-a",
+  "displayName": "Codex A",
+  "agentMetadata": {
+    "modelId": "gpt-5.6",
+    "reasoningEffort": "high",
+    "provider": "openai",
+    "clientVersion": "arena-client-0.3.0",
+    "strategyId": "default-local",
+    "strategyVersion": "2026-08-21",
+    "strategyHash": "sha256:..."
+  }
+}
+```
+
+所有字段均可选，但 `agentMetadata` 一旦出现至少要包含一个有效字段。服务端会添加 `source=declared`，表示这些值由 Agent 自报，不应视为运行环境证明。平台托管 Agent 若需要可信模型信息，应由平台在接入层注入并另外完成签名或审计。
+
+同一 Agent 在座位准备前可以更新声明信息；调用 `start_game` 使该席位就绪后，信息锁定，修改会返回 `agent_metadata_locked`。声明信息保存在 `seatControllers[seatId].agentMetadata`、全局参与者信息和回放记录中，并随多局比赛的下一局继承。
 
 MCP 配置示例：
 
@@ -64,7 +106,7 @@ Token 只映射邀请类型、牌局、座位和有效期，不包含模型配�
 POST /agent/v1/games/:gameId/join
 Content-Type: application/json
 
-{"seatId":0,"agentId":"codex-session-a","displayName":"Codex 策略 A","strategyId":"default"}
+{"seatId":0,"agentId":"codex-session-a","displayName":"Codex 策略 A","strategyId":"default","agentMetadata":{"modelId":"gpt-5.6","reasoningEffort":"high"}}
 ```
 
 同一 `agentId` 可以重连原座位；其他 Agent 占用后返回 `seat_occupied`。

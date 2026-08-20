@@ -546,6 +546,13 @@ function renderStrategyDocument() {
   context.className = 'strategy-context';
   context.textContent = strategyRoleLabel(strategySeat);
   content.appendChild(context);
+  const agentDetails = formatAgentMetadata(participant?.agentMetadata);
+  if (agentDetails) {
+    const agentMetadata = document.createElement('small');
+    agentMetadata.className = 'strategy-metadata';
+    agentMetadata.textContent = `Agent 声明 · ${agentDetails}`;
+    content.appendChild(agentMetadata);
+  }
   if (!strategy) {
     const empty = document.createElement('p');
     empty.className = 'decision-empty';
@@ -719,7 +726,10 @@ function createHistoryItem(record) {
   const participants = labels.map((label, seatId) => {
     const participant = record.participants?.[seatId];
     if (!participant) return `${label} 空位`;
-    if (participant.type === 'agent') return `${label} ${participant.displayName || participant.id || 'Agent'} · ${participant.strategy?.name || '默认策略'}`;
+    if (participant.type === 'agent') {
+      const agentDetails = formatAgentMetadata(participant.agentMetadata);
+      return `${label} ${participant.displayName || participant.id || 'Agent'} · ${agentDetails || participant.strategy?.name || '默认策略'}`;
+    }
     return `${label} ${participant.displayName || participant.id || '玩家'} · 人工玩家`;
   });
   const status = record.phase === 'over'
@@ -816,7 +826,7 @@ function renderLifecycle() {
     const readyCount = state.readySeats?.length || 0;
     const selfReady = state.readySeats?.includes(controlledSeat);
     $('game-status').textContent = rematch ? selfReady ? '同牌复战，等待其他玩家' : '同牌复战，等待玩家准备' : selfReady ? '等待其他玩家' : '等待玩家准备';
-    $('ready-status').textContent = `${rematch ? `来源 ${state.sourceGameId} · ` : ''}${readyCount} / 3 已就绪`;
+    $('ready-status').textContent = `${rematch ? `来源 ${state.sourceGameId} · ` : ''}${readyCount} / 3 已就绪${accessModeLabel(state.accessMode) ? ` · ${accessModeLabel(state.accessMode)}` : ''}`;
     button.textContent = '开始对局';
     button.hidden = !controlActive || selfReady;
     button.disabled = false;
@@ -856,7 +866,12 @@ function controllerLabel(id) {
   if (replayMode) return 'Bot';
   return controlActive && id === controlledSeat ? '玩家' : '未接入';
 }
-function setPlayer(position, id, labels, roles, controllers) { renderAvatar($(`${position}-avatar`), id, labels[id]); $(`${position}-name`).textContent = `${roles(id)} ${labels[id]} · ${controllers(id)}`; $(`${position}-name`).title = state.seatControllers?.[id]?.id || ''; $(`${position}-count`).textContent = state.phase === 'waiting' ? readyLabel(id) : `${state.hands[id].count} 张`; renderOpponentHand(position, id); }
+function formatAgentMetadata(metadata) {
+  if (!metadata) return '';
+  return [metadata.modelId, metadata.reasoningEffort ? `推理 ${metadata.reasoningEffort}` : '', metadata.strategyId ? `策略 ${metadata.strategyId}` : '', metadata.clientVersion ? `客户端 ${metadata.clientVersion}` : ''].filter(Boolean).join(' · ');
+}
+function accessModeLabel(mode) { return ({ open:'开放加入', invite_only:'仅限邀请', private:'私有对局' })[mode] || ''; }
+function setPlayer(position, id, labels, roles, controllers) { renderAvatar($(`${position}-avatar`), id, labels[id]); $(`${position}-name`).textContent = `${roles(id)} ${labels[id]} · ${controllers(id)}`; $(`${position}-name`).title = [state.seatControllers?.[id]?.id, formatAgentMetadata(state.seatControllers?.[id]?.agentMetadata)].filter(Boolean).join(' · '); $(`${position}-count`).textContent = state.phase === 'waiting' ? readyLabel(id) : `${state.hands[id].count} 张`; renderOpponentHand(position, id); }
 function renderAvatar(element, id, label) {
   const role = ['play', 'over'].includes(state.phase) ? (state.landlord === id ? 'landlord' : 'farmer') : 'neutral';
   const roleLabel = role === 'landlord' ? '地主' : role === 'farmer' ? '农民' : '身份待定';
@@ -949,7 +964,7 @@ async function action(payload) {
   catch (error) { setConnectionError(error); }
 }
 
-function errorText(error) { return ({ invalid_action:'动作格式错误', illegal_play:'这组牌不能出', cannot_pass_first:'你需要先出牌', cards_not_in_hand:'手牌状态已变化', not_your_turn:'还没轮到你', invalid_bid:'叫地主动作无效', game_not_started:'对局还未开始', players_not_ready:'请等待三家全部准备就绪', game_already_started:'对局已经开始', seat_occupied:'座位已被占用', seat_not_joined:'请先加入一个座位', rematch_source_not_completed:'只能复战已完成的对局', rematch_source_invalid:'来源对局缺少有效初始牌局' }[error] || error || '动作未接受'); }
+function errorText(error) { return ({ invalid_action:'动作格式错误', illegal_play:'这组牌不能出', cannot_pass_first:'你需要先出牌', cards_not_in_hand:'手牌状态已变化', not_your_turn:'还没轮到你', invalid_bid:'叫地主动作无效', game_not_started:'对局还未开始', players_not_ready:'请等待三家全部准备就绪', game_already_started:'对局已经开始', seat_occupied:'座位已被占用', seat_not_joined:'请先加入一个座位', invite_required:'该对局仅允许通过邀请加入', access_denied:'当前身份无权加入该私有对局', invalid_access_mode:'接入模式无效', invalid_agent_metadata:'Agent 信息格式无效', agent_metadata_locked:'座位准备后不能修改 Agent 信息', rematch_source_not_completed:'只能复战已完成的对局', rematch_source_invalid:'来源对局缺少有效初始牌局' }[error] || error || '动作未接受'); }
 function switchSeat(nextSeat) { seat = normalizeSeat(nextSeat); selected.clear(); syncUrl(); replayMode ? render() : refresh(); }
 function switchView(nextView) { view = normalizeView(nextView); selected.clear(); syncUrl(); replayMode ? render() : refresh(); }
 function openReplay(targetGameId) {
