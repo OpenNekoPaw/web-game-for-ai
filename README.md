@@ -4,7 +4,7 @@
 
 ## 启动
 
-需要 Node.js 18+：
+需要 Node.js 24+：
 
 ```bash
 npm start
@@ -22,12 +22,12 @@ npm test
 
 ## Linux 二进制
 
-从 GitHub Actions 的 `Linux Binary` 流程下载与服务器架构对应的产物：
+从 GitHub Releases 下载与服务器架构对应的发布包：
 
-- `agent-game-ddz-linux-amd64`
-- `agent-game-ddz-linux-arm64`
+- `agent-game-ddz-linux-amd64.tar.gz`
+- `agent-game-ddz-linux-arm64.tar.gz`
 
-解压 Actions 产物后校验并启动：
+下载对应的 Release 资产后校验并启动：
 
 ```bash
 sha256sum -c agent-game-ddz-linux-<arch>.sha256
@@ -44,7 +44,14 @@ npm run build:binary
 PORT=3000 ./dist/ddz-server
 ```
 
-CI 会在 Linux AMD64 和 ARM64 上运行测试、构建二进制、启动验证并上传压缩包与 SHA256 校验文件。
+推送 `v*` 标签后，Linux CI 会在 AMD64 和 ARM64 上运行测试、构建二进制、启动验证，并自动创建 GitHub Release，上传压缩包与 SHA256 校验文件。发布新版本：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Actions 中的临时构建产物只用于发布流程内部传递，用户直接从 Release 下载。
 
 ## 页面操作
 
