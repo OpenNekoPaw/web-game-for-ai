@@ -5,8 +5,7 @@ const replayReturn = params.get('return');
 const inviteToken = params.get('invite');
 let gameId = params.get('game');
 let competitionId = params.get('competition');
-const ownsInitialRoom = Boolean(gameId && localStorage.getItem(`ddz-room-owner-token:${gameId}`));
-let setupConfirmed = params.get('setup') === '1' || Boolean(competitionId) || Boolean(inviteToken) || Boolean(gameId && !ownsInitialRoom);
+let setupConfirmed = Boolean(gameId || competitionId || inviteToken);
 let selectedAccessMode = 'open';
 let seatJoinInviteToken = null;
 let seat = normalizeSeat(params.get('seat'));
@@ -57,21 +56,19 @@ function normalizeView(value) { return value === 'global' ? 'global' : 'player';
 function isRoomOwner() { return Boolean(storedRoomOwnerToken(gameId)); }
 function syncUrl() {
   const next = new URL(location.href);
-  next.searchParams.set('seat', seat);
+  next.searchParams.delete('seat');
+  next.searchParams.delete('control');
+  next.searchParams.delete('setup');
+  next.searchParams.delete('view');
+  next.searchParams.delete('invite');
   if (replayMode) {
     next.searchParams.set('replay', replayGameId);
-    next.searchParams.delete('game'); next.searchParams.delete('competition'); next.searchParams.delete('control'); next.searchParams.delete('invite'); next.searchParams.delete('setup');
-  } else if (activeInvite) {
-    next.searchParams.set('invite', activeInvite.token);
-    next.searchParams.delete('game'); next.searchParams.delete('competition'); next.searchParams.delete('control'); next.searchParams.delete('setup');
+    next.searchParams.delete('game'); next.searchParams.delete('competition');
   } else {
-    next.searchParams.delete('invite');
-    if (controlRequested) next.searchParams.set('control', controlledSeat); else next.searchParams.delete('control');
-    if (gameId) next.searchParams.set('game', gameId);
+    next.searchParams.delete('replay');
+    if (gameId) next.searchParams.set('game', gameId); else next.searchParams.delete('game');
     if (competitionId) next.searchParams.set('competition', competitionId); else next.searchParams.delete('competition');
-    if (setupConfirmed) next.searchParams.set('setup', '1'); else next.searchParams.delete('setup');
   }
-  if (view === 'global') next.searchParams.set('view', 'global'); else next.searchParams.delete('view');
   history.replaceState(null, '', next);
 }
 function showMessage(text, error = false) { clearTimeout(messageTimer); const element = $('message'); element.textContent = text; element.className = `message visible ${error ? 'error' : ''}`; messageTimer = setTimeout(() => { element.className = 'message'; }, 2200); }
@@ -152,14 +149,26 @@ async function resolveInvite() {
   if (!response.ok) throw new Error(data.error || 'invite_not_found');
   if (!['player', 'spectator'].includes(data.inviteType)) throw new Error('invite_type_mismatch');
   activeInvite = data;
+  sessionStorage.setItem(`ddz-active-invite:${data.gameId}`, JSON.stringify(data));
+  if (data.competitionId) sessionStorage.setItem(`ddz-active-invite:${data.competitionId}`, JSON.stringify(data));
   setupConfirmed = true;
   gameId = data.gameId;
   competitionId = data.competitionId || null;
   if (Number.isInteger(data.seatId)) seat = normalizeSeat(data.seatId);
   controlledSeat = seat;
   controlRequested = data.inviteType === 'player';
-  view = data.inviteType === 'spectator' ? 'global' : 'player';
+  view = 'player';
   syncUrl();
+}
+
+function restoreActiveInvite(targetGameId = gameId) {
+  if (!targetGameId || activeInvite) return;
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(`ddz-active-invite:${competitionId || targetGameId}`) || sessionStorage.getItem(`ddz-active-invite:${targetGameId}`) || 'null');
+    if ((stored?.gameId === targetGameId || stored?.competitionId === competitionId) && typeof stored.token === 'string') activeInvite = stored;
+  } catch {
+    sessionStorage.removeItem(`ddz-active-invite:${targetGameId}`);
+  }
 }
 
 function setAgentPanel(open, type = selectedAgentType) {
@@ -342,7 +351,10 @@ async function ensurePlayerJoined() {
       persistPlayerId(sessionId, joinedSeat, playerId);
       rememberSeatSession(sessionId, joinedSeat, data.seatSessionToken, data.reconnectCode);
     }
-    if (data.invite && activeInvite) activeInvite = { ...activeInvite, ...data.invite };
+    if (data.invite && activeInvite) {
+      activeInvite = { ...activeInvite, ...data.invite };
+      sessionStorage.setItem(`ddz-active-invite:${competitionId || gameId}`, JSON.stringify(activeInvite));
+    }
     rememberReplayAccess(data.replayAccessToken, gameId);
     controlActive = true;
     autoJoinRequested = false;
@@ -401,6 +413,7 @@ function localRoomPlayerId(sessionId) {
 function rememberSeatSession(sessionId, seatId, token, reconnectCode) {
   if (!sessionId || ![0, 1, 2].includes(Number(seatId)) || typeof token !== 'string') return;
   localStorage.setItem(`ddz-seat-session:${sessionId}:${seatId}`, JSON.stringify({ token, reconnectCode: String(reconnectCode || '') }));
+  localStorage.setItem(`ddz-active-seat:${sessionId}`, String(seatId));
 }
 
 function storedSeatSession(sessionId, seatId) {
@@ -412,13 +425,36 @@ function storedSeatSession(sessionId, seatId) {
 }
 
 function forgetSeatSession(sessionId, seatId) {
-  if (sessionId && [0, 1, 2].includes(Number(seatId))) localStorage.removeItem(`ddz-seat-session:${sessionId}:${seatId}`);
+  if (sessionId && [0, 1, 2].includes(Number(seatId))) {
+    localStorage.removeItem(`ddz-seat-session:${sessionId}:${seatId}`);
+    if (localStorage.getItem(`ddz-active-seat:${sessionId}`) === String(seatId)) localStorage.removeItem(`ddz-active-seat:${sessionId}`);
+  }
+}
+
+function restoreStoredControlRequest(sessionId = competitionId || gameId) {
+  if (!sessionId || controlRequested || controlActive) return false;
+  const preferred = Number(localStorage.getItem(`ddz-active-seat:${sessionId}`));
+  const seats = [preferred, 0, 1, 2].filter((value, index, values) => [0, 1, 2].includes(value) && values.indexOf(value) === index);
+  const recoveredSeat = seats.find((candidate) => storedSeatSession(sessionId, candidate));
+  if (recoveredSeat === undefined) return false;
+  seat = recoveredSeat;
+  controlledSeat = recoveredSeat;
+  controlRequested = true;
+  return true;
 }
 
 function seatSessionHeaders(sessionId = competitionId || gameId, seatId = controlledSeat) {
   if (!controlRequested && !controlActive) return {};
   const token = storedSeatSession(sessionId, seatId)?.token;
   return token ? { 'x-seat-session-token': token, 'x-seat-session-seat': String(seatId) } : {};
+}
+
+function observationHeaders(requestedSeat = seat) {
+  const headers = { ...seatSessionHeaders(competitionId || gameId, requestedSeat) };
+  const ownerToken = storedRoomOwnerToken(gameId);
+  if (ownerToken) headers['x-room-owner-token'] = ownerToken;
+  if (activeInvite?.token) headers['x-game-invite-token'] = activeInvite.token;
+  return headers;
 }
 
 function rememberRoomOwner(token, targetGameId = gameId) {
@@ -621,9 +657,9 @@ async function refresh() {
   try {
     await ensurePlayerJoined();
     const stateUrl = new URL(`/api/games/${gameId}/state`, location.origin); stateUrl.searchParams.set('seat', seat); if (view === 'global') stateUrl.searchParams.set('view', 'global');
-    const response = await fetch(stateUrl, { headers: seatSessionHeaders(competitionId || gameId, seat) });
+    const response = await fetch(stateUrl, { headers: observationHeaders(seat) });
     const data = await readJson(response);
-    if (!response.ok) { if (data.error === 'game_not_found') return create(1, { confirmed: false, owner: true }); throw new Error(data.error || 'state_failed'); }
+    if (!response.ok) throw new Error(data.error || 'state_failed');
     if (data.competition?.competitionId) competitionId = data.competition.competitionId;
     if (data.competition?.currentGameId && data.competition.currentGameId !== gameId) {
       const replayToken = storedReplayAccess(gameId);
@@ -634,7 +670,7 @@ async function refresh() {
       controlActive = controlActive || activeInvite?.inviteType === 'player'; playerJoinAttempt = controlActive ? gameId : null; strategyParticipants = {}; strategySnapshotGameId = null; selected.clear(); syncUrl(); refreshing = false; return refresh();
     }
     state = data;
-    if (controlActive && data.controlAuthorized === false) {
+    if (controlActive && seat === controlledSeat && data.controlAuthorized === false) {
       controlActive = false;
       controlRequested = false;
       playerJoinAttempt = null;
@@ -685,6 +721,8 @@ function render() {
   const bidLabel = state.bidStage === 'rob' ? '抢地主' : '叫地主';
   $('invite-game').hidden = replayMode || !gameId || !setupConfirmed || !isRoomOwner();
   $('agent-connect').hidden = replayMode || !setupConfirmed || !isRoomOwner();
+  $('global-view').hidden = !replayMode && !isRoomOwner();
+  document.querySelector('.perspectives').hidden = false;
   const activeSession = controlActive ? storedSeatSession(competitionId || gameId, controlledSeat) : null;
   $('session-code-header').hidden = !activeSession?.reconnectCode || replayMode;
   $('session-code-header').textContent = activeSession?.reconnectCode ? `重连码 ${activeSession.reconnectCode}` : '重连码';
@@ -773,7 +811,8 @@ async function loadStrategyDetails(force = false) {
   strategyLoading = true;
   renderStrategyDocument();
   try {
-    const response = await fetch(`/api/games/${encodeURIComponent(gameId)}/strategies?view=global`);
+    const ownerToken = storedRoomOwnerToken(gameId);
+    const response = await fetch(`/api/games/${encodeURIComponent(gameId)}/strategies?view=global`, { headers: ownerToken ? { 'x-room-owner-token': ownerToken } : {} });
     const data = await readJson(response);
     if (!response.ok) throw new Error(data.error || 'strategy_load_failed');
     strategyParticipants = data.participants || {};
@@ -1108,6 +1147,26 @@ function renderLifecycle() {
   sessionInfo.hidden = true;
   ownerControls.hidden = true;
   ownerControls.replaceChildren();
+  if (!state && !replayMode) {
+    container.hidden = false;
+    setup.hidden = false;
+    playerJoin.hidden = true;
+    reconnectTools.hidden = true;
+    confirmButton.hidden = false;
+    button.hidden = true;
+    $('game-status').textContent = '选择比赛局数';
+    $('ready-status').textContent = '确认后创建房间，再添加玩家或 Agent';
+    document.querySelectorAll('[data-rounds]').forEach((roundButton) => {
+      roundButton.classList.toggle('active', Number(roundButton.dataset.rounds) === selectedRounds);
+      roundButton.disabled = false;
+    });
+    document.querySelectorAll('[data-access-mode]').forEach((accessButton) => {
+      accessButton.classList.toggle('active', accessButton.dataset.accessMode === selectedAccessMode);
+      accessButton.disabled = false;
+    });
+    confirmButton.textContent = `确认 ${selectedRounds} 局 · ${accessModeLabel(selectedAccessMode)}`;
+    return;
+  }
   if (replayMode || !['waiting', 'over'].includes(state.phase)) { container.hidden = true; return; }
   container.hidden = false;
   if (state.phase === 'waiting') {
@@ -1317,9 +1376,7 @@ function switchView(nextView) { view = normalizeView(nextView); selected.clear()
 function openReplay(targetGameId) {
   const target = new URL('/', location.origin);
   target.searchParams.set('replay', targetGameId);
-  target.searchParams.set('seat', seat);
-  if (view === 'global') target.searchParams.set('view', 'global');
-  target.searchParams.set('return', replayMode ? replayReturn || '/?seat=0' : `${location.pathname}${location.search}`);
+  target.searchParams.set('return', replayMode ? replayReturn || '/' : `${location.pathname}${location.search}`);
   location.href = target;
 }
 
@@ -1339,8 +1396,6 @@ async function createReplayRematch() {
     target.searchParams.set('game', data.gameId);
     rememberReplayAccess(data.replayAccessToken, data.gameId);
     rememberRoomOwner(data.roomOwnerToken, data.gameId);
-    target.searchParams.set('seat', seat);
-    if (view === 'global') target.searchParams.set('view', 'global');
     location.assign(target.href);
   } catch (error) {
     button.disabled = false;
@@ -1349,9 +1404,9 @@ async function createReplayRematch() {
   }
 }
 
-$('new-game').onclick = () => { if (replayMode) location.href = replayReturn?.startsWith('/?') ? replayReturn : '/?seat=0'; };
+$('new-game').onclick = () => { if (replayMode) location.href = replayReturn?.startsWith('/') ? replayReturn : '/'; };
 $('rematch-game').onclick = createReplayRematch;
-$('start-game').onclick = () => state?.phase === 'over' ? create(1, { confirmed: false, owner: true }) : start();
+$('start-game').onclick = () => state?.phase === 'over' ? resetToRoomSetup() : start();
 $('confirm-setup').onclick = confirmMatchSetup;
 $('agent-connect').onclick = () => setAgentTypeMenu($('agent-type-menu').hidden);
 $('invite-game').onclick = () => setInviteMenu($('invite-menu').hidden);
@@ -1419,11 +1474,40 @@ async function initialize() {
   try {
     if (inviteToken) await resolveInvite();
     if (replayMode) await loadReplay();
-    else if (gameId) await refresh();
-    else await create(1, { confirmed: false, owner: true });
+    else if (gameId) {
+      restoreActiveInvite(gameId);
+      restoreStoredControlRequest(competitionId || gameId);
+      if (view === 'global' && !isRoomOwner()) view = 'player';
+      syncUrl();
+      await refresh();
+    } else renderRoomSetupEntry();
   } catch (error) {
     setConnectionError(error);
   }
+}
+
+function renderRoomSetupEntry() {
+  state = null;
+  gameId = null;
+  competitionId = null;
+  setupConfirmed = false;
+  controlRequested = false;
+  controlActive = false;
+  activeInvite = null;
+  selected.clear();
+  syncUrl();
+  $('invite-game').hidden = true;
+  $('agent-connect').hidden = true;
+  $('global-view').hidden = true;
+  document.querySelector('.perspectives').hidden = true;
+  ['bid', 'decline', 'pass', 'play'].forEach((id) => toggle(id, false));
+  renderLifecycle();
+}
+
+function resetToRoomSetup() {
+  selectedRounds = 1;
+  selectedAccessMode = 'open';
+  renderRoomSetupEntry();
 }
 
 initialize();
