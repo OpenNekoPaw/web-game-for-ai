@@ -27,11 +27,11 @@ MVP 使用服务端远程 MCP（JSON-RPC over HTTP）。服务端是唯一裁判
 - `invite_only`：玩家和 Agent 必须通过对应邀请 token 加入；直接调用 `join_game` 或 `/games/:gameId/join` 返回 `invite_required`。
 - `private`：邀请 token 仍可加入；无邀请时，仅 `allowedAgentIds` 或 `allowedPlayerIds` 中的稳定身份可以直接加入，其他身份返回 `access_denied`。
 
-接入策略只管理座位准入，不是完整的用户认证系统。生产环境仍应在网关层保护创建邀请、全局观战和管理接口。`accessMode` 会写入观察、比赛状态与回放，并在比赛换局时保持不变。
+接入策略仍不是完整的账户认证系统，但浏览器接口会保护私有观察、创建邀请、全局牌面和管理操作：座位私有视角要求 `seatSessionToken`，全局牌面要求 `roomOwnerToken`，私人房间的无座位观战要求有效观战邀请。`accessMode` 会写入观察、比赛状态与回放，并在比赛换局时保持不变。
 
 H5 普通用户界面只展示“公开房间”和“私人房间”：公开房间映射为 `open`，私人房间映射为 `invite_only`。带身份白名单的 `private` 保留给 API 和赛事管理使用，不在普通建房界面单独展示。
 
-公开房间可直接打开 `/?game=<gameId>`，无需在 URL 指定座位；用户点击“加入对局”后，服务端原子分配第一个空座。私人房间的普通访客即使知道 `gameId` 也不能直接占座，只能通过 `/?invite=<token>` 玩家邀请链接加入。玩家邀请同样自动分配空座；Agent 邀请继续绑定明确的 `seatId`。
+公开房间可直接打开 `/?game=<gameId>`，无需在 URL 指定座位；用户点击“加入对局”后，服务端原子分配第一个空座。私人房间的普通访客即使知道 `gameId` 也不能观察或占座，只能通过 `/?invite=<token>` 玩家或观战邀请链接进入。页面解析邀请后将 Token 保存到当前标签会话并立即从地址栏清除。玩家邀请同样自动分配空座；Agent 邀请继续绑定明确的 `seatId`。
 
 ## 私人对局记录
 
@@ -81,7 +81,7 @@ MCP 配置示例：
 
 ## 邀请链接
 
-`POST /api/games/:gameId/invites` 创建邀请，`inviteType` 为 `player`、`agent` 或 `spectator`。玩家邀请默认不指定 `seatId`，加入时由服务端在一次原子操作中按 A、B、C 顺序分配第一个空座；也可显式指定空闲的 `seatId`。Agent 邀请必须指定 `seatId`，以保持席位和评测身份稳定。玩家和 Agent 邀请 30 分钟内有效并只能由同一身份占用；同一身份重试会返回原座位。当多个自动邀请竞争最后一个座位时只有一个成功，其他请求返回 `room_full`。观战邀请可重复打开并进入全局视角。
+`POST /api/games/:gameId/invites` 创建邀请，`inviteType` 为 `player`、`agent` 或 `spectator`。玩家邀请默认不指定 `seatId`，加入时由服务端在一次原子操作中按 A、B、C 顺序分配第一个空座；也可显式指定空闲的 `seatId`。Agent 邀请必须指定 `seatId`，以保持席位和评测身份稳定。玩家和 Agent 邀请 30 分钟内有效并只能由同一身份占用；同一身份重试会返回原座位。当多个自动邀请竞争最后一个座位时只有一个成功，其他请求返回 `room_full`。观战邀请可重复打开，但只返回不含任何玩家手牌的公开牌面。
 
 - 玩家链接：`/?invite=<token>`，浏览器打开后使用 `POST /api/invites/:token/join` 占座。
 - Agent 链接：`/agent/v1/invites/:token`，服务端 MCP 使用 `join_invite` 解析并占座。
@@ -98,7 +98,7 @@ Token 只映射邀请类型、牌局、座位和有效期，不包含模型配�
 2. 三个席位在首局加入并分别调用 `start_game`；每局结束后每个 Agent 调用一次 `submit_review`。
 3. 三份短复盘提交完成后，服务创建下一局新的 `gameId`，继承席位和策略快照，但需要三席再次 `start_game` 准备。
 4. 最后一局结束后进入 `reviewing_competition`；Agent 通过 `submit_competition_review` 提交综合总结，全部提交后比赛变为 `over`。
-5. `GET /agent/v1/competitions/:competitionId?seatId=0` 只返回该席的复盘；`GET /api/competitions/:competitionId?view=global` 才返回全局复盘。
+5. `GET /agent/v1/competitions/:competitionId?seatId=0` 只返回该席的复盘；`GET /api/competitions/:competitionId?view=global` 还必须携带 `x-room-owner-token` 才返回全局复盘。
 
 每局以 `baseScore=1` 进行零和计分：地主胜地主 `+2`、两位农民各 `-1`；农民胜地主 `-2`、两位农民各 `+1`。标准计分会对炸弹、火箭、春天、反春分别执行 `×2`，最终 `scoreDelta` 是基础分乘以 `multiplier`。结算中的 `multiplierReasons`、`bombCount`、`rocketCount`、`spring`、`antiSpring` 和 `playsBySeat` 说明倍率来源。单局 `gameId` 与比赛 `competitionId` 始终分开，比赛记录通过 `rounds` 累计总分。
 
@@ -106,9 +106,9 @@ Token 只映射邀请类型、牌局、座位和有效期，不包含模型配�
 
 - 座位：`0`、`1`、`2`，界面显示为 A、B、C；出牌轮转为 `seat + 1`。
 - 以当前视角为底部时，左侧是 `seat + 2`，右侧是 `seat + 1`（例如 A 视角左 C、右 B）。
-- H5 页面中的 `seat` 只表示观察视角，`control` 是兼容的本地控制参数；邀请玩家优先使用 `invite` Token 占座。可选 `name=<displayName>` 设置普通玩家的公开名称。切换视角不会改变控制座位。
+- H5 规范 URL 不包含 `seat`、`control`、`setup` 或 `view`。界面座位方向保存在当前页面状态中；服务端状态接口即使收到 `seat` 查询参数，也只把它当作公开观察方向，只有请求头中的有效座位 Token 才能决定私有手牌视角。可选 `name=<displayName>` 设置普通玩家的公开名称。
 - H5 普通玩家通过 `POST /api/games/:gameId/join` 占座，Agent 通过 `/agent/v1/.../join` 占座；两者可以任意组合，但不能占用同一座位。
-- 只有使用服务端目录策略的席位会在全局观战界面展示策略；本地 Agent 策略不上传，也不会出现在该接口或回放中。
+- 只有使用服务端目录策略的席位会在房主全局牌面展示策略；该接口要求 `x-room-owner-token`。本地 Agent 策略不上传，也不会出现在该接口或回放中。
 - `seatControllers` 返回每个已占座位置的 `{type,id,displayName}`，其中 `type` 为 `player` 或 `agent`。`id` 只是稳定公开标识，不能作为座位凭证；`displayName` 是牌桌、策略面板和历史对局显示的公开名称（最多 40 字符）。`readySeats` 只包含已明确确认开始的座位。
 - 普通牌：`rank:suit`，例如 `3:0`。
 - rank：`3..15`，其中 `11=J`、`12=Q`、`13=K`、`14=A`、`15=2`。
@@ -126,7 +126,7 @@ Content-Type: application/json
 
 同一 `agentId` 可以重连原座位；其他 Agent 占用后返回 `seat_occupied`。
 
-H5 等待界面中央提供 `1/3/5/7 局`设置。选择 3、5 或 7 局会创建比赛并把 `competition` 和首局 `game` 写入 URL；席位加入后局数锁定，防止换局导致已接入玩家丢失。
+H5 首页先在本地提供 `1/3/5/7 局`和公开/私人房间设置，此时不会创建服务端状态。用户点击确认后才创建单局或比赛，并把公开定位用的 `game`（多局时还有 `competition`）写入 URL；席位加入后配置锁定，防止换局导致已接入玩家丢失。
 
 ### 普通玩家座位会话与掉线
 
