@@ -154,6 +154,14 @@ x-room-owner-token: <roomOwnerToken>
 
 在线玩家返回 `player_still_online`；开局后返回 `game_already_started`。`seatPresence` 按座位返回 `online`、`offline` 或 `managed`，供 H5 展示掉线和托管状态。Token 与重连码均不得写入 URL、公开状态或回放。
 
+### 中断恢复与存储生命周期
+
+- 当前活动牌局以内存状态运行；创建、加入、准备、合法动作、托管动作和复盘提交成功后，以 `game:<gameId>` 覆盖保存恢复检查点。观察请求和倒计时等派生状态不逐次写入。
+- 玩家心跳以内存更新为主，最多每 30 秒随当前牌局检查点保存一次。座位 Token 与重连码属于恢复状态，不依赖公开的 `playerId`。
+- Durable Object 休眠、迁移或 Worker 更新后，从对应牌局的最近检查点恢复。中断超过 10 分钟仍未恢复的活动牌局标记为 `aborted`，不再继续；已结束牌局的热状态保留 5 分钟后移除。
+- 回放独立于活动状态保存。内部格式只保存初始状态和后续增量，读取接口仍返回兼容的完整 `frames`；私人回放凭证随回放元数据保存，但不会出现在 URL、公开观察或回放响应中。
+- 全局存储只保留比赛汇总、未过期邀请和 ID 游标，不再包含所有牌局或完整回放。过期邀请和失效活动状态会被清理。
+
 ## 观察
 
 观察包含 `seq`、当前阶段、轮到的座位、自己的手牌、其他座位剩余牌数、公共出牌信息和 `roleContext`。`hands[].cards`、`lastPlay.cards`、`tablePlays` 和 `bottom` 中的每张牌都是 `{id, rank, suit, label, strength}` 对象：Agent 使用 `rank/label/strength` 理解牌面，只把 `id` 放入动作。这样牌面语义与机器标识绑定，不需要通过平行数组下标对应，也不要求模型把数字重新映射成 A、2 或王。`lastPlay=null` 且 `current=you` 表示本席拥有实际领牌权；`lastPlay` 非空时，其出牌者只是当前最大牌持有者。`passCount=0` 时不要会把响应交给下一席，`passCount=1` 时再不要则清墩，并由下一席（当前 `lastPlay.seatId`）领牌。`roleContext.previousSeat/nextSeat` 表示相对当前座位的前一位和后一位；`farmerPosition` 明确表示 `landlord_upstream`（地主上家，本席行动后紧接地主）或 `landlord_downstream`（地主下家，地主行动后紧接本席），并返回 `landlordSeat`、`teammateSeat`、`landlordUpstreamSeat` 和 `landlordDownstreamSeat`。叫地主结束前，角色相关字段为 `null`。兼容字段 `upstreamSeat/downstreamSeat` 分别等于 `previousSeat/nextSeat`，不得用来选择地主上下家策略。`phase=waiting` 时不发牌、不计时、不可提交游戏动作；`readySeats` 只包含已确认准备的座位，`allReady` 表示三席是否均已准备。其他玩家的 `cards` 始终为空；`tablePlays` 保留当前桌面最大出牌，后续玩家“不要”只更新 `tablePasses`，直到下一次有效出牌才替换整组桌面展示。`turnDeadlineAt` 是服务端回合截止时间，Agent 应在此时间前提交动作。实时私有观察中的 `decisions` 始终为空，避免向玩家泄露其他 Agent 的策略摘要。
@@ -234,6 +242,6 @@ Agent 可以附加可公开的结构化决策摘要；该字段可选，不影�
 - 普通玩家座位和房主管理操作已有局部 Token 鉴权，但当前没有账户、登录、封禁或全平台权限体系；Agent HTTP 接口仍依赖调用方身份约定。
 - MCP 通过 HTTP 请求承载 JSON-RPC；旧 HTTP Agent 路径保留兼容，动作与观察字段保持兼容。
 - 服务端不替代空座，但会为已占座且掉线的普通玩家托管。在线玩家和 Agent 的回合固定为 60 秒；超时属于裁判兜底。托管和超时均在叫地主阶段自动“不叫”、抢地主阶段自动“不抢”、跟牌阶段自动“不要”，必须领出时选择一个最小合法动作。
-- Node 本地服务在进程内保存牌局；Cloudflare 部署通过 Durable Object 持久化并串行处理请求。
+- Node 本地服务在进程内保存牌局；Cloudflare 部署使用 Durable Object 串行处理请求，并按牌局保存短时恢复检查点。观察和派生状态不实时写入。
 - 每轮有独立回放和结算，综合总结只在最后一轮完成后提交。
 - 本地策略由 Agent 自己读取并按对局锁定，只提供给本地模型。`strategies/ddz/*.md` 是可选的服务端目录策略；两种方式都要求一份文件是一套完整方案。复盘只提出建议，不自动编辑策略。
