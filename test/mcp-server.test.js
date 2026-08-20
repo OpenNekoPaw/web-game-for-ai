@@ -24,7 +24,7 @@ test('server MCP endpoint exposes game tools and keeps local strategy out of res
   assert.match(game.gameId, /^ddz-/);
 
   const invite = await fetch(`http://127.0.0.1:${port}/api/games/${game.gameId}/invites`, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ inviteType: 'agent', seatId: 0 })
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-room-owner-token': game.roomOwnerToken }, body: JSON.stringify({ inviteType: 'agent', seatId: 0 })
   }).then((response) => response.json());
   const joined = await callMcp(port, 'tools/call', { name: 'join_invite', arguments: { inviteToken: invite.token, agentId: 'mcp-agent-a' } });
   const joinedState = joined.result.structuredContent;

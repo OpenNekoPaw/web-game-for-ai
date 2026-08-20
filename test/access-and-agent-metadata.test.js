@@ -22,7 +22,7 @@ test('access modes distinguish open, invite-only, and private admission', () => 
   const inviteOnly = createMatch({ accessMode: 'invite_only' });
   assert.throws(() => joinMatch(inviteOnly.gameId, 0, 'direct-agent'), /invite_required/);
   assert.throws(() => joinPlayerMatch(inviteOnly.gameId, 1, 'direct-player'), /invite_required/);
-  const invite = createMatchInvite(inviteOnly.gameId, 'agent', 0);
+  const invite = createMatchInvite(inviteOnly.gameId, 'agent', 0, inviteOnly.roomOwnerToken);
   assert.equal(joinAgentInvite(invite.token, 'invited-agent').seatControllers[0].id, 'invited-agent');
 
   const privateGame = createMatch({
@@ -76,6 +76,8 @@ test('agent metadata is normalized, replayed, and locked when the seat is ready'
 test('competition preserves access mode and agent metadata across rounds', () => {
   const competition = createCompetition({ totalRounds: 3, accessMode: 'private', allowedAgentIds: ['a', 'b', 'c'] });
   const game = getMatch(competition.currentGameId);
+  assert.match(competition.replayAccessToken, /^[A-Za-z0-9_-]{32,128}$/);
+  assert.equal(game.replayAccessToken, competition.replayAccessToken);
   for (const [seatId, agentId] of ['a', 'b', 'c'].entries()) {
     joinMatch(game.gameId, seatId, agentId, undefined, agentId.toUpperCase(), {
       strategyMode: 'local',
@@ -95,6 +97,7 @@ test('competition preserves access mode and agent metadata across rounds', () =>
   const next = observeMatch(result.competition.currentGameId, 0);
 
   assert.equal(next.accessMode, 'private');
+  assert.equal(getMatch(result.competition.currentGameId).replayAccessToken, competition.replayAccessToken);
   assert.equal(next.seatControllers[0].agentMetadata.modelId, 'model-a');
   assert.equal(next.seatControllers[2].agentMetadata.reasoningEffort, 'medium');
 });

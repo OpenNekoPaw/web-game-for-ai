@@ -42,11 +42,11 @@ test('rematch waits for three ready seats then restores the same deal and first 
   assert.equal(readReplay(rematch.gameId).sourceGameId, sourceGameId);
   assert.equal(listReplays().items.find((item) => item.gameId === rematch.gameId)?.sourceGameId, sourceGameId);
 
-  for (const seatId of [0, 1, 2]) joinPlayerMatch(rematch.gameId, seatId, `rematch-player-${seatId}`);
-  startMatch(rematch.gameId, 0);
-  startMatch(rematch.gameId, 1);
+  const sessions = [0, 1, 2].map((seatId) => joinPlayerMatch(rematch.gameId, seatId, `rematch-player-${seatId}`).seatSessionToken);
+  startMatch(rematch.gameId, 0, { seatSessionToken: sessions[0] });
+  startMatch(rematch.gameId, 1, { seatSessionToken: sessions[1] });
   assert.equal(getMatch(rematch.gameId).phase, 'waiting');
-  startMatch(rematch.gameId, 2);
+  startMatch(rematch.gameId, 2, { seatSessionToken: sessions[2] });
 
   const started = getMatch(rematch.gameId);
   assert.equal(started.phase, 'bid');
