@@ -2,6 +2,13 @@
 // The Worker persists the exported records to R2 after each state-changing
 // request; the Durable Object storage keeps the hot working set available.
 const records = new Map();
+const dirtyRecords = new Map();
+let revision = 0;
+
+function markDirty(gameId) {
+  revision += 1;
+  dirtyRecords.set(gameId, revision);
+}
 
 export function createReplay(gameId, state, participants = {}) {
   const now = Date.now();
@@ -11,12 +18,14 @@ export function createReplay(gameId, state, participants = {}) {
     completedAt: null, participants: structuredClone(participants),
     frames: [{ index: 0, at: now, event: { type: 'created' }, state: structuredClone(state) }]
   });
+  markDirty(gameId);
 }
 
 export function updateReplayParticipants(gameId, participants) {
   const replay = requireReplay(gameId);
   replay.participants = structuredClone(participants);
   replay.updatedAt = Date.now();
+  markDirty(gameId);
 }
 
 export function appendReplayFrame(gameId, event, state, participants = {}) {
@@ -26,6 +35,7 @@ export function appendReplayFrame(gameId, event, state, participants = {}) {
   replay.frames.push({ index: replay.frames.length, at: now, event: structuredClone(event), state: structuredClone(state) });
   replay.updatedAt = now;
   if (isCompletedState(state) && replay.completedAt === null) replay.completedAt = now;
+  markDirty(gameId);
 }
 
 export function readReplay(gameId) {
@@ -50,9 +60,29 @@ export function exportReplayState() {
   return [...records.values()].map((replay) => structuredClone(replay));
 }
 
+export function getReplayRevision() {
+  return revision;
+}
+
+export function exportDirtyReplayState() {
+  return [...dirtyRecords.entries()].map(([gameId, dirtyRevision]) => ({
+    gameId,
+    revision: dirtyRevision,
+    replay: structuredClone(records.get(gameId))
+  }));
+}
+
+export function markReplayStatePersisted(entries = []) {
+  for (const entry of entries) {
+    if (dirtyRecords.get(entry.gameId) === entry.revision) dirtyRecords.delete(entry.gameId);
+  }
+}
+
 export function importReplayState(replays = []) {
   records.clear();
   for (const replay of replays) records.set(replay.gameId, structuredClone(replay));
+  dirtyRecords.clear();
+  revision += 1;
 }
 
 function requireReplay(gameId) {
