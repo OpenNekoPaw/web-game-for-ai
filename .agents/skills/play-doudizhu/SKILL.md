@@ -60,6 +60,12 @@ For a multi-round competition, call `create_competition` with 3, 5, or 7 rounds,
 ## Operational Constraints
 
 - `turnTimeoutMs` is fixed at 60000 ms. Use `turnDeadlineAt` and `serverNow` to ensure the model submits within the minute.
+- Target submission within about 45 seconds of `turnStartedAt`, preserving roughly 15 seconds for observation, transport, and stale-state recovery. Spend at most the first 20 seconds organizing the hand and estimating remaining plays, then narrow to one or two candidates and reserve the final 10 seconds for legality, card-ID, and public-summary validation.
+- If the preferred action is still unresolved near the 45-second target, submit the highest-ranked legal candidate under the selected strategy. Do not wait for the service timeout or switch to an unrelated fast-play policy.
+- Use an asynchronous, event-driven observation loop. After a successful `submit_action`, immediately continue observing and precompute reversible candidate routes during other seats' turns; do not wait until `isYourTurn` becomes true before thinking.
+- Never use a long blocking sleep such as `sleep 30` or `sleep 55` while a match is active. If polling is the only available mechanism, use short interruptible intervals and re-check `phase`, `isYourTurn`, `seq`, and `turnDeadlineAt` after every observation.
+- Treat precomputed candidates as provisional. Any `seq`, public-state, turn, automatic-timeout, or phase change invalidates affected candidates; recompute from the newest observation. Do not reuse stale `lastPlay`, `allowedActions`, or card IDs.
+- Before every action, call `observe_game` and select only from its current `allowedActions`; asynchronous planning must reduce decision latency but never replace this final validation.
 - The deadline limits overlong analysis; it must not create a separate fast-decision policy or change the selected strategy near expiry.
 - Compare the action with `lastPlay`; `tablePlays` is a display field, not the authoritative comparison target.
 - Treat control precisely. When `lastPlay=null` and `current=you`, this seat has the actual lead. When `lastPlay` exists, its `seatId` is only the current high player, not a guaranteed next leader. If `passCount=0`, passing gives `roleContext.nextSeat` another response; if `passCount=1`, passing resets the trick and `roleContext.nextSeat` (the `lastPlay.seatId`) gains the actual lead.

@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getStrategy, listStrategies } from '../game/strategy-store.js';
+import { getStrategy as getFileStrategy, listStrategies } from '../game/strategy-store.js';
+import { getStrategy as getRuntimeStrategy } from '../game/strategy-runtime.js';
 
 test('default strategy is one complete replaceable plan', () => {
   const listed = listStrategies();
   assert.equal(listed.defaultStrategyId, 'default');
   assert.deepEqual(listed.strategies.map((strategy) => strategy.id), ['default']);
 
-  const strategy = getStrategy();
+  const strategy = getFileStrategy();
   assert.equal(strategy.id, 'default');
   assert.ok(strategy.updatedAt > 0);
   assert.match(strategy.hash, /^[a-f0-9]{12}$/);
@@ -22,9 +23,9 @@ test('default strategy is one complete replaceable plan', () => {
     '## 一张牌与少牌残局',
     '## 复盘关注'
   ]) assert.ok(strategy.markdown.includes(section), `missing strategy section: ${section}`);
-  assert.match(strategy.markdown, /lastPlay=null.*current=you.*实际领牌权/);
-  assert.match(strategy.markdown, /passCount=0/);
-  assert.match(strategy.markdown, /passCount=1/);
+  assert.match(strategy.markdown, /新一墩开始且轮到本席.*实际领牌权/);
+  assert.match(strategy.markdown, /第一家不要/);
+  assert.match(strategy.markdown, /第二家不要/);
   assert.match(strategy.markdown, /还需 N 手/);
   assert.match(strategy.markdown, /当前动作 -> 剩余合法组合 -> 每次继续出牌的牌权来源/);
   assert.match(strategy.markdown, /本席剩两张/);
@@ -33,5 +34,9 @@ test('default strategy is one complete replaceable plan', () => {
 });
 
 test('unknown strategy ids are rejected instead of composed with default', () => {
-  assert.throws(() => getStrategy('missing-plan'), /strategy_not_found/);
+  assert.throws(() => getFileStrategy('missing-plan'), /strategy_not_found/);
+});
+
+test('runtime strategy stays synchronized with the editable source', () => {
+  assert.equal(getRuntimeStrategy().markdown, getFileStrategy().markdown);
 });
