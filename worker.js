@@ -1,29 +1,11 @@
 import { handleWorkerRequest } from './worker-api.js';
-import { expireInterruptedMatches, exportRecoverableGameState, exportStoreState, importStoreState, listRecoverableGameIds, nextMaintenanceAt, tickMatches } from './game/store.js';
-import { exportDirtyReplayState, getReplayRevision, markReplayStatePersisted } from './game/replay-runtime.js';
+import {
+  expireInterruptedMatches, exportDirtyAuthoritativeState, exportRecoverableGameState, exportStoreState,
+  importStoreState, listRecoverableGameIds, markAuthoritativeStatePersisted, nextMaintenanceAt, tickMatches
+} from './game/store.js';
+import { exportDirtyReplayState, markReplayStatePersisted } from './game/replay-runtime.js';
 
 const apiPath = (pathname) => pathname.startsWith('/api/') || pathname.startsWith('/agent/') || pathname === '/mcp';
-const readOnlyMcpTools = new Set(['list_strategies', 'observe_game', 'observe_competition']);
-const persistenceCheckpointMs = 30_000;
-
-async function persistenceContext(request) {
-  const url = new URL(request.url);
-  const pathGameId = url.pathname.match(/\/(?:games|replays)\/(ddz-[0-9]+)/)?.[1] || null;
-  if (url.pathname !== '/mcp' && url.pathname !== '/agent/mcp') {
-    return { immediate: !['GET', 'HEAD', 'OPTIONS'].includes(request.method), gameId: pathGameId };
-  }
-  if (request.method !== 'POST') return { immediate: false, gameId: null };
-  try {
-    const message = await request.clone().json();
-    if (message?.method !== 'tools/call') return { immediate: false, gameId: null };
-    return {
-      immediate: !readOnlyMcpTools.has(message.params?.name),
-      gameId: /^ddz-[0-9]+$/.test(message.params?.arguments?.gameId) ? message.params.arguments.gameId : null
-    };
-  } catch {
-    return { immediate: false, gameId: null };
-  }
-}
 
 export default {
   async fetch(request, env) {
@@ -41,7 +23,6 @@ export class ArenaDurableObject {
     this.state = state;
     this.env = env;
     this.loaded = false;
-    this.lastPersistedAt = 0;
     this.nextAlarmAt = null;
     this.state.blockConcurrencyWhile?.(() => this.load());
   }
@@ -71,7 +52,6 @@ export class ArenaDurableObject {
       if (expiredGameIds.length) await this.persist({ gameIds: expiredGameIds, prune: true });
     }
     this.loaded = true;
-    this.lastPersistedAt = Date.now();
     this.nextAlarmAt = this.state.storage.getAlarm ? await this.state.storage.getAlarm() : null;
   }
 
@@ -121,30 +101,34 @@ export class ArenaDurableObject {
 
   async persist(options = {}) {
     const now = Date.now();
+    const authoritative = options.authoritative || exportDirtyAuthoritativeState();
     const dirtyReplays = exportDirtyReplayState();
-    const gameIds = new Set([...dirtyReplays.map((entry) => entry.gameId), ...(options.gameIds || [])]);
+    const gameIds = new Set([
+      ...authoritative.gameRevisions.map(([gameId]) => gameId),
+      ...dirtyReplays.map((entry) => entry.gameId),
+      ...(options.gameIds || [])
+    ]);
     await this.persistGameRecords(gameIds, now);
     await this.persistReplayRecords(dirtyReplays);
-    const snapshot = exportStoreState({ includeGames: false, includeReplays: false });
-    await this.state.storage.put('snapshot', JSON.stringify(snapshot));
+    if (authoritative.metadataRevision) {
+      const snapshot = exportStoreState({ includeGames: false, includeReplays: false });
+      await this.state.storage.put('snapshot', JSON.stringify(snapshot));
+    }
     if (this.env.REPLAYS) await Promise.all(dirtyReplays.map(({ replay }) => this.env.REPLAYS.put(
       `replays/${replay.gameId}.json`, JSON.stringify(replay),
       { httpMetadata: { contentType: 'application/json; charset=utf-8' } }
     )));
     markReplayStatePersisted(dirtyReplays);
+    markAuthoritativeStatePersisted(authoritative);
     if (options.prune === true) await this.pruneGameRecords(now);
-    this.lastPersistedAt = Date.now();
   }
 
   async fetch(request) {
     await this.load();
-    const context = await persistenceContext(request);
-    const revisionBefore = getReplayRevision();
     const response = await handleWorkerRequest(request);
-    const replayChanged = getReplayRevision() !== revisionBefore;
-    const checkpointDue = Date.now() - this.lastPersistedAt >= persistenceCheckpointMs;
-    if (context.immediate || replayChanged || (checkpointDue && context.gameId)) {
-      await this.persist({ gameIds: context.gameId ? [context.gameId] : [], prune: checkpointDue });
+    const authoritative = exportDirtyAuthoritativeState();
+    if (authoritative.metadataRevision || authoritative.gameRevisions.length || exportDirtyReplayState().length) {
+      await this.persist({ authoritative });
     }
     await this.scheduleMaintenance();
     return response;
@@ -153,11 +137,11 @@ export class ArenaDurableObject {
   async alarm() {
     await this.load();
     this.nextAlarmAt = null;
-    const revisionBefore = getReplayRevision();
     tickMatches();
     const expiredGameIds = expireInterruptedMatches();
-    if (getReplayRevision() !== revisionBefore || expiredGameIds.length) {
-      await this.persist({ gameIds: expiredGameIds, prune: expiredGameIds.length > 0 });
+    const authoritative = exportDirtyAuthoritativeState();
+    if (authoritative.metadataRevision || authoritative.gameRevisions.length || exportDirtyReplayState().length) {
+      await this.persist({ authoritative, gameIds: expiredGameIds, prune: expiredGameIds.length > 0 });
     }
     await this.scheduleMaintenance();
   }

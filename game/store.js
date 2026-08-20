@@ -16,6 +16,34 @@ const ACCESS_MODES = new Set(['open', 'invite_only', 'private']);
 const configuredTurnTimeoutMs = normalizeTurnTimeout(globalThis.process?.env?.TURN_TIMEOUT_MS);
 let lastGameTimestamp = 0;
 let lastCompetitionTimestamp = 0;
+let authoritativeRevision = 0;
+let dirtyMetadataRevision = 0;
+const dirtyGameRevisions = new Map();
+
+function markGameAuthoritative(gameId) {
+  authoritativeRevision += 1;
+  dirtyGameRevisions.set(gameId, authoritativeRevision);
+}
+
+function markMetadataAuthoritative() {
+  authoritativeRevision += 1;
+  dirtyMetadataRevision = authoritativeRevision;
+}
+
+export function exportDirtyAuthoritativeState() {
+  return {
+    revision: authoritativeRevision,
+    metadataRevision: dirtyMetadataRevision,
+    gameRevisions: [...dirtyGameRevisions.entries()]
+  };
+}
+
+export function markAuthoritativeStatePersisted(state = {}) {
+  for (const [gameId, revision] of state.gameRevisions || []) {
+    if (dirtyGameRevisions.get(gameId) === revision) dirtyGameRevisions.delete(gameId);
+  }
+  if (dirtyMetadataRevision === state.metadataRevision) dirtyMetadataRevision = 0;
+}
 
 export function createMatch(options = {}) {
   const game = createGame(nextGameId());
@@ -46,6 +74,8 @@ export function createMatch(options = {}) {
   clearTurnClock(game);
   games.set(game.gameId, game);
   createReplay(game.gameId, replayState(game), {}, { replayAccessToken: game.replayAccessToken });
+  markGameAuthoritative(game.gameId);
+  markMetadataAuthoritative();
   return game;
 }
 
@@ -80,6 +110,7 @@ export function createCompetition(options = {}) {
   const game = createMatch({ competitionId, roundNumber: 1, turnTimeoutMs: competition.turnTimeoutMs, accessMode, allowedAgentIds, allowedPlayerIds, replayAccessToken, roomOwnerToken });
   competition.currentGameId = game.gameId;
   competition.gameIds.push(game.gameId);
+  markMetadataAuthoritative();
   return { ...observeCompetition(competitionId), roomOwnerToken, ...(replayAccessToken ? { replayAccessToken } : {}) };
 }
 
@@ -207,10 +238,15 @@ export function expireInterruptedMatches(now = Date.now()) {
       }
     }
     games.delete(game.gameId);
+    markGameAuthoritative(game.gameId);
+    markMetadataAuthoritative();
     expiredGameIds.push(game.gameId);
   }
   for (const [token, invite] of invites) {
-    if (expiredGameIds.includes(invite.gameId)) invites.delete(token);
+    if (expiredGameIds.includes(invite.gameId)) {
+      invites.delete(token);
+      markMetadataAuthoritative();
+    }
   }
   return expiredGameIds;
 }
@@ -232,6 +268,8 @@ export function importStoreState(snapshot = {}) {
   for (const [id, invite] of decoded.invites || []) invites.set(id, invite);
   lastGameTimestamp = decoded.lastGameTimestamp || 0;
   lastCompetitionTimestamp = decoded.lastCompetitionTimestamp || 0;
+  dirtyGameRevisions.clear();
+  dirtyMetadataRevision = 0;
   importReplayState(decoded.replays || []);
   for (const game of games.values()) bindReplayAccessToken(game.gameId, game.replayAccessToken);
 }
@@ -279,6 +317,7 @@ export function joinMatch(gameId, seatId, agentId, strategyId, displayName, opti
   else if (strategyId && game.agentStrategies.get(seatId).id !== strategyId) throw new Error('strategy_mismatch');
   game.updatedAt = Date.now();
   updateReplayParticipants(gameId, participants(game));
+  markGameAuthoritative(gameId);
   return withReplayAccess(game, observeMatch(gameId, seatId));
 }
 
@@ -309,6 +348,8 @@ export function createMatchInvite(gameId, inviteType, seatId, roomOwnerToken) {
     usedBy: null
   };
   invites.set(invite.token, invite);
+  markGameAuthoritative(gameId);
+  markMetadataAuthoritative();
   return publicInvite(invite);
 }
 
@@ -321,7 +362,10 @@ export function joinAgentInvite(token, agentId, displayName, agentMetadata) {
   const identity = normalizeInviteIdentity(agentId, 'anonymous');
   assertInviteIdentity(invite, identity);
   const result = joinMatch(invite.gameId, invite.seatId, identity, undefined, displayName, { strategyMode: 'local', viaInvite: true, agentMetadata });
-  invite.usedBy ||= identity;
+  if (!invite.usedBy) {
+    invite.usedBy = identity;
+    markMetadataAuthoritative();
+  }
   return { invite: publicInvite(invite), ...result };
 }
 
@@ -333,8 +377,14 @@ export function joinPlayerInvite(token, playerId, displayName, seatSessionToken)
   const targetSeat = invite.assignedSeat ?? invite.seatId ?? [0, 1, 2].find((seatId) => !occupiedSeats(game).includes(seatId));
   if (targetSeat === undefined) throw new Error('room_full');
   const result = joinPlayerMatch(invite.gameId, targetSeat, identity, displayName, { viaInvite: !game.playerSessions.has(targetSeat), seatSessionToken });
-  invite.usedBy ||= identity;
-  invite.assignedSeat ??= targetSeat;
+  if (!invite.usedBy) {
+    invite.usedBy = identity;
+    markMetadataAuthoritative();
+  }
+  if (invite.assignedSeat === null || invite.assignedSeat === undefined) {
+    invite.assignedSeat = targetSeat;
+    markMetadataAuthoritative();
+  }
   return { invite: publicInvite(invite), ...result };
 }
 
@@ -348,6 +398,7 @@ export function joinPlayerMatch(gameId, seatId, playerId, displayName, options =
   // recover after a refresh without requiring the original short-lived invite.
   if (!occupant) assertSeatAdmission(game, 'player', playerId, options.viaInvite === true);
   const existingSession = game.playerSessions.get(seatId);
+  const wasManaged = existingSession?.managed === true;
   if (occupant && existingSession && !existingSession.legacy && !options.viaInvite) {
     assertSeatSession(game, seatId, options.seatSessionToken);
   }
@@ -358,8 +409,11 @@ export function joinPlayerMatch(gameId, seatId, playerId, displayName, options =
   game.displayNames.set(seatId, resolvedDisplayName);
   const session = ensurePlayerSession(game, seatId);
   session.lastSeenAt = Date.now();
+  session.managed = false;
   game.updatedAt = session.lastSeenAt;
   updateReplayParticipants(gameId, participants(game));
+  if (wasManaged) recordFrame(game, { type: 'managed_ended', seatId }, session.lastSeenAt);
+  else markGameAuthoritative(gameId);
   return withPlayerSession(game, seatId, withReplayAccess(game, observeMatch(gameId, seatId, { seatSessionToken: session.token })));
 }
 
@@ -384,6 +438,8 @@ export function reconnectPlayerMatch(gameId, reconnectCode) {
   session.token = createAccessToken();
   session.reconnectCode = createReconnectCode(game);
   session.lastSeenAt = Date.now();
+  session.managed = false;
+  recordFrame(game, { type: 'player_reconnected', seatId }, session.lastSeenAt);
   return withPlayerSession(game, seatId, withReplayAccess(game, observeMatch(gameId, seatId, { seatSessionToken: session.token })));
 }
 
@@ -409,7 +465,10 @@ export function startMatch(gameId, seatId = null, options = {}) {
   game.ready.add(seatId);
   if (occupiedSeats(game).length === 3 && game.ready.size === 3) {
     startGame(game, game.presetDeal);
-    if (game.competitionId) requireCompetition(game.competitionId).status = 'playing';
+    if (game.competitionId) {
+      requireCompetition(game.competitionId).status = 'playing';
+      markMetadataAuthoritative();
+    }
     resetTurnClock(game);
     recordFrame(game, { type: 'started', seatId });
   } else if (!wasReady) recordFrame(game, { type: 'ready', seatId });
@@ -455,7 +514,6 @@ export function submitMatchAction(gameId, seatId, action, expectedSeq, options =
     applyAction(game, seatId, action);
   } catch (error) {
     game.actionStats[seatId].rejectedActions += 1;
-    recordFrame(game, { type: 'action_rejected', source: options.source || 'player', seatId, action, error: error.message });
     throw error;
   }
   settleGame(game);
@@ -540,6 +598,7 @@ export function submitCompetitionReview(competitionId, seatId, review) {
     competition.status = 'over';
     competition.completedAt = Date.now();
   }
+  markMetadataAuthoritative();
   recordFrame(currentGame, { type: 'competition_review', seatId, review: record });
   return observeCompetition(competitionId, seatId);
 }
@@ -585,9 +644,9 @@ export function nextMaintenanceAt(now = Date.now()) {
     }
     if (game.winner !== null) continue;
     if (Number.isFinite(game.turnDeadlineAt)) candidates.push(game.turnDeadlineAt);
-    if (game.players.has(game.current)) {
-      const lastSeenAt = Number(game.playerSessions.get(game.current)?.lastSeenAt) || 0;
-      candidates.push(lastSeenAt + PLAYER_OFFLINE_MS);
+    for (const seatId of game.players.keys()) {
+      const session = game.playerSessions.get(seatId);
+      if (!session?.managed) candidates.push((Number(session?.lastSeenAt) || 0) + PLAYER_OFFLINE_MS);
     }
   }
   if (!candidates.length) return null;
@@ -601,7 +660,7 @@ export function advanceMatchTimeout(gameId, now = Date.now()) {
 function advanceTimedOutTurn(game, now = Date.now()) {
   if (game.phase === 'waiting') { clearTurnClock(game); return null; }
   ensureTurnClock(game, now);
-  const managed = isPlayerOffline(game, game.current, now);
+  const managed = game.playerSessions.get(game.current)?.managed === true || isPlayerOffline(game, game.current, now);
   if (game.winner !== null || game.turnDeadlineAt === null || (!managed && now < game.turnDeadlineAt)) return null;
   const seatId = game.current;
   const bidStage = game.bidStage;
@@ -623,6 +682,7 @@ function advanceTimedOutTurn(game, now = Date.now()) {
 function recordFrame(game, event, now = Date.now()) {
   game.updatedAt = now;
   appendReplayFrame(game.gameId, event, replayState(game, now), participants(game));
+  markGameAuthoritative(game.gameId);
 }
 
 function replayState(game, now = Date.now()) {
@@ -710,7 +770,7 @@ function seatControllers(game) {
 function seatPresence(game, now = Date.now()) {
   return Object.fromEntries(occupiedSeats(game).map((seatId) => {
     if (game.agents.has(seatId)) return [seatId, { status: 'online', controllerType: 'agent' }];
-    const offline = isPlayerOffline(game, seatId, now);
+    const offline = game.playerSessions.get(seatId)?.managed === true || isPlayerOffline(game, seatId, now);
     return [seatId, {
       status: offline ? (game.phase === 'waiting' ? 'offline' : 'managed') : 'online',
       controllerType: 'player'
@@ -721,9 +781,10 @@ function seatPresence(game, now = Date.now()) {
 function ensurePlayerSession(game, seatId) {
   let session = game.playerSessions.get(seatId);
   if (!session || session.legacy || !normalizeAccessToken(session.token)) {
-    session = { token: createAccessToken(), reconnectCode: createReconnectCode(game), lastSeenAt: Date.now() };
+    session = { token: createAccessToken(), reconnectCode: createReconnectCode(game), lastSeenAt: Date.now(), managed: false };
     game.playerSessions.set(seatId, session);
   }
+  session.managed = session.managed === true;
   return session;
 }
 
@@ -762,7 +823,9 @@ function assertSeatSession(game, seatId, token) {
 function assertControllerSession(game, seatId, token) {
   if (!game.players.has(seatId)) return;
   const session = assertSeatSession(game, seatId, token);
-  session.lastSeenAt = Date.now();
+  const now = Date.now();
+  session.lastSeenAt = now;
+  setPlayerManaged(game, seatId, false, now);
 }
 
 function touchAuthorizedPlayer(game, seatId, token) {
@@ -770,7 +833,9 @@ function touchAuthorizedPlayer(game, seatId, token) {
   if (![0, 1, 2].includes(normalizedSeat) || !game.players.has(normalizedSeat)) return false;
   const session = game.playerSessions.get(normalizedSeat);
   if (!session || session.token !== normalizeAccessToken(token)) return false;
-  session.lastSeenAt = Date.now();
+  const now = Date.now();
+  session.lastSeenAt = now;
+  setPlayerManaged(game, normalizedSeat, false, now);
   return true;
 }
 
@@ -781,13 +846,27 @@ function isPlayerOffline(game, seatId, now = Date.now()) {
 }
 
 function maintainPlayerPresence(game, now = Date.now()) {
-  if (game.phase !== 'waiting') return;
+  if (game.phase !== 'waiting') {
+    if (game.winner !== null) return;
+    for (const seatId of game.players.keys()) {
+      if (isPlayerOffline(game, seatId, now)) setPlayerManaged(game, seatId, true, now);
+    }
+    return;
+  }
   for (const seatId of [...game.players.keys()]) {
     const session = game.playerSessions.get(seatId);
     if (!session || now - Number(session.lastSeenAt || 0) >= WAITING_SEAT_RELEASE_MS) {
       releasePlayerSeat(game, seatId, 'disconnect_timeout', now);
     }
   }
+}
+
+function setPlayerManaged(game, seatId, managed, now = Date.now()) {
+  const session = game.playerSessions.get(seatId);
+  if (!session || session.managed === managed) return false;
+  session.managed = managed;
+  recordFrame(game, { type: managed ? 'managed_started' : 'managed_ended', seatId }, now);
+  return true;
 }
 
 function releasePlayerSeat(game, seatId, reason, now = Date.now()) {
@@ -920,6 +999,7 @@ function settleGame(game) {
     reviews: {}
   });
   competition.status = 'reviewing_round';
+  markMetadataAuthoritative();
   if (game.agents.size === 0) advanceCompetitionAfterRound(game);
 }
 
@@ -933,6 +1013,7 @@ function advanceCompetitionAfterRound(game) {
       competition.status = 'over';
       competition.completedAt = Date.now();
     } else competition.status = 'reviewing_competition';
+    markMetadataAuthoritative();
     return;
   }
   const nextRound = game.roundNumber + 1;
@@ -958,6 +1039,7 @@ function advanceCompetitionAfterRound(game) {
   competition.currentGameId = nextGame.gameId;
   competition.gameIds.push(nextGame.gameId);
   competition.status = 'waiting';
+  markMetadataAuthoritative();
 }
 
 function competitionStateForGame(game, seatId = null, revealAll = false) {
@@ -1126,7 +1208,8 @@ function hydrateGame(game) {
   game.playerSessions = game.playerSessions instanceof Map ? game.playerSessions : new Map();
   game.updatedAt = Number(game.updatedAt) || Number(game.gameId?.slice(4)) || Date.now();
   for (const seatId of game.players?.keys?.() || []) {
-    if (!game.playerSessions.has(seatId)) game.playerSessions.set(seatId, { token: null, reconnectCode: null, lastSeenAt: Date.now(), legacy: true });
+    if (!game.playerSessions.has(seatId)) game.playerSessions.set(seatId, { token: null, reconnectCode: null, lastSeenAt: Date.now(), managed: false, legacy: true });
+    else game.playerSessions.get(seatId).managed = game.playerSessions.get(seatId).managed === true;
   }
   return game;
 }
@@ -1233,6 +1316,7 @@ function requireInvite(token, expectedType = null) {
   if (!invite) throw new Error('invite_not_found');
   if (Date.now() >= invite.expiresAt) {
     invites.delete(token);
+    markMetadataAuthoritative();
     throw new Error('invite_expired');
   }
   if (expectedType && invite.inviteType !== expectedType) throw new Error('invite_type_mismatch');
@@ -1242,7 +1326,10 @@ function requireInvite(token, expectedType = null) {
 
 function pruneExpiredInvites(now) {
   for (const [token, invite] of invites) {
-    if (now >= invite.expiresAt) invites.delete(token);
+    if (now >= invite.expiresAt) {
+      invites.delete(token);
+      markMetadataAuthoritative();
+    }
   }
 }
 
