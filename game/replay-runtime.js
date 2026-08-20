@@ -37,11 +37,13 @@ export function listReplays(options = {}) {
   const limit = Math.min(100, Math.max(1, Number(options.limit) || 50));
   const offset = Math.max(0, Number(options.offset) || 0);
   const status = options.status === 'completed' ? 'completed' : 'all';
+  const accessMode = options.accessMode === 'all' ? 'all' : 'open';
   const summaries = [...records.values()]
     .sort((left, right) => Number(right.gameId.slice(4)) - Number(left.gameId.slice(4)))
     .map(replaySummary)
+    .filter((item) => accessMode === 'all' || item.accessMode === 'open')
     .filter((item) => status !== 'completed' || isCompletedSummary(item));
-  return { total: summaries.length, offset, limit, status, items: summaries.slice(offset, offset + limit) };
+  return { total: summaries.length, offset, limit, status, accessMode, items: summaries.slice(offset, offset + limit) };
 }
 
 export function exportReplayState() {

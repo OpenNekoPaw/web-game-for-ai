@@ -2,14 +2,17 @@ import http from 'node:http';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
-import { createCompetition, createMatch, createMatchInvite, createRematch, getMatch, getMatchStrategies, getReplay, getStrategies, joinAgentInvite, joinMatch, joinPlayerInvite, joinPlayerMatch, observeCompetition, observeMatch, resolveMatchInvite, startMatch, submitCompetitionReview, submitMatchAction, submitMatchReview, tickMatches } from './game/store.js';
-import { listReplays } from './game/replay-runtime.js';
+import { createCompetition, createMatch, createMatchInvite, createRematch, getAuthorizedReplay, getMatch, getMatchStrategies, getStrategies, joinAgentInvite, joinAvailablePlayerMatch, joinMatch, joinPlayerInvite, joinPlayerMatch, listAccessibleReplays, observeCompetition, observeMatch, reconnectPlayerMatch, removeDisconnectedPlayer, resolveMatchInvite, startMatch, submitCompetitionReview, submitMatchAction, submitMatchReview, tickMatches } from './game/store.js';
 import { assetsDirectory } from './game/runtime-paths.js';
 import { handleMcpMessage } from './server/mcp.js';
 
 const mime = { '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.css':'text/css; charset=utf-8' };
 const json = (res, code, body) => { res.writeHead(code, {'content-type':'application/json; charset=utf-8','access-control-allow-origin':'*'}); res.end(JSON.stringify(body)); };
 const body = async (req) => { let data=''; for await (const chunk of req) data += chunk; return data ? JSON.parse(data) : {}; };
+const replayAccess = (req) => String(req.headers['x-replay-access-token'] || '').trim();
+const seatSession = (req) => String(req.headers['x-seat-session-token'] || '').trim();
+const seatSessionSeat = (req) => req.headers['x-seat-session-seat'];
+const roomOwner = (req) => String(req.headers['x-room-owner-token'] || '').trim();
 const mcp = async (req, res) => {
   if (req.method !== 'POST') return json(res, 405, { error: 'method_not_allowed' });
   let message;
@@ -39,12 +42,12 @@ const handleRequest = async (req, res) => {
       return json(res, 200, { protocol:'agent-game.v1', format:'agentskills', fileName:'SKILL.md', hash, markdown });
     }
     if (req.method === 'GET' && url.pathname === '/agent/v1/strategies') return json(res, 200, { protocol:'agent-game.v1', ...getStrategies() });
-    if (req.method === 'GET' && url.pathname === '/api/replays') return json(res, 200, listReplays({ limit:url.searchParams.get('limit'), offset:url.searchParams.get('offset'), status:url.searchParams.get('status') }));
+    if (req.method === 'GET' && url.pathname === '/api/replays') return json(res, 200, listAccessibleReplays({ limit:url.searchParams.get('limit'), offset:url.searchParams.get('offset'), status:url.searchParams.get('status'), replayAccessToken:replayAccess(req) }));
     const browserInvite = url.pathname.match(/^\/api\/invites\/([^/]+)(?:\/(join))?$/);
     if (browserInvite) {
       try {
         if (req.method === 'GET' && !browserInvite[2]) return json(res, 200, resolveMatchInvite(browserInvite[1]));
-        if (req.method === 'POST' && browserInvite[2] === 'join') { const data = await body(req); return json(res, 200, joinPlayerInvite(browserInvite[1], data.playerId, data.displayName)); }
+        if (req.method === 'POST' && browserInvite[2] === 'join') { const data = await body(req); return json(res, 200, joinPlayerInvite(browserInvite[1], data.playerId, data.displayName, seatSession(req))); }
       } catch (error) { return json(res, error.message === 'invite_not_found' ? 404 : 400, { protocol:'agent-game.v1', ok:false, error:error.message }); }
     }
     const agentInvite = url.pathname.match(/^\/agent\/v1\/invites\/([^/]+)(?:\/(join))?$/);
@@ -70,13 +73,13 @@ const handleRequest = async (req, res) => {
       catch (error) { return json(res, error.message === 'competition_not_found' ? 404 : 400, { error:error.message }); }
     }
     const replayMatch = url.pathname.match(/^\/api\/replays\/([^/]+)$/);
-    if (req.method === 'GET' && replayMatch) { try { return json(res, 200, getReplay(replayMatch[1])); } catch (error) { return json(res, error.message === 'replay_not_found' ? 404 : 400, { error: error.message }); } }
+    if (req.method === 'GET' && replayMatch) { try { return json(res, 200, getAuthorizedReplay(replayMatch[1], replayAccess(req))); } catch (error) { return json(res, error.message === 'replay_not_found' ? 404 : error.message === 'replay_access_denied' ? 403 : 400, { error: error.message }); } }
     const replayRematch = url.pathname.match(/^\/api\/replays\/([^/]+)\/rematch$/);
     if (req.method === 'POST' && replayRematch) {
-      try { await body(req); const game = createRematch(replayRematch[1]); return json(res, 201, { protocol:'agent-game.v1', gameId:game.gameId, sourceGameId:game.sourceGameId, turnTimeoutMs:game.turnTimeoutMs }); }
-      catch (error) { return json(res, error.message === 'replay_not_found' ? 404 : 400, { error:error.message }); }
+      try { await body(req); const game = createRematch(replayRematch[1], replayAccess(req)); return json(res, 201, { protocol:'agent-game.v1', gameId:game.gameId, sourceGameId:game.sourceGameId, accessMode:game.accessMode, replayAccessToken:game.replayAccessToken || undefined, roomOwnerToken:game.roomOwnerToken, turnTimeoutMs:game.turnTimeoutMs }); }
+      catch (error) { return json(res, error.message === 'replay_not_found' ? 404 : error.message === 'replay_access_denied' ? 403 : 400, { error:error.message }); }
     }
-    if (req.method === 'POST' && (url.pathname === '/api/games' || url.pathname === '/agent/v1/games')) { const data = await body(req); const game = createMatch(data); return json(res, 201, { protocol:'agent-game.v1', gameId: game.gameId, accessMode: game.accessMode, turnTimeoutMs: game.turnTimeoutMs }); }
+    if (req.method === 'POST' && (url.pathname === '/api/games' || url.pathname === '/agent/v1/games')) { const data = await body(req); const game = createMatch(data); return json(res, 201, { protocol:'agent-game.v1', gameId: game.gameId, accessMode: game.accessMode, replayAccessToken:game.replayAccessToken || undefined, roomOwnerToken:game.roomOwnerToken, turnTimeoutMs: game.turnTimeoutMs }); }
     const agentMatch = url.pathname.match(/^\/agent\/v1\/games\/([^/]+)\/(join|observe|start|actions|review)$/);
     if (agentMatch) {
       const data = req.method === 'POST' ? await body(req) : {};
@@ -89,14 +92,18 @@ const handleRequest = async (req, res) => {
         if (agentMatch[2] === 'review' && req.method === 'POST') return json(res, 200, submitMatchReview(agentMatch[1], seatId, data.review));
       } catch (error) { return json(res, 400, { protocol:'agent-game.v1', ok:false, error:error.message }); }
     }
+    const reconnect = url.pathname.match(/^\/api\/games\/([^/]+)\/reconnect$/);
+    if (req.method === 'POST' && reconnect) { const data = await body(req); try { return json(res, 200, reconnectPlayerMatch(reconnect[1], data.reconnectCode)); } catch (error) { return json(res, 400, {ok:false,error:error.message}); } }
+    const removePlayer = url.pathname.match(/^\/api\/games\/([^/]+)\/players\/([0-2])$/);
+    if (req.method === 'DELETE' && removePlayer) { try { return json(res, 200, removeDisconnectedPlayer(removePlayer[1], Number(removePlayer[2]), roomOwner(req))); } catch (error) { return json(res, error.message === 'room_owner_required' ? 403 : 400, {ok:false,error:error.message}); } }
     const match = url.pathname.match(/^\/api\/games\/([^/]+)(?:\/(state|strategies|join|start|actions|invites))?$/); if (!match) return json(res, 404, { error: 'not_found' });
     const game = getMatch(match[1]); if (!game) return json(res, 404, { error: 'game_not_found' });
-    if (req.method === 'GET' && match[2] === 'state') { const seat = Number(url.searchParams.get('seat')); const revealAll = url.searchParams.get('view') === 'global'; try { return json(res, 200, observeMatch(match[1], seat, { revealAll })); } catch (error) { return json(res, 400, {error:error.message}); } }
+    if (req.method === 'GET' && match[2] === 'state') { const seat = Number(url.searchParams.get('seat')); const revealAll = url.searchParams.get('view') === 'global'; try { return json(res, 200, observeMatch(match[1], seat, { revealAll, seatSessionToken:seatSession(req), controlSeatId:seatSessionSeat(req) })); } catch (error) { return json(res, 400, {error:error.message}); } }
     if (req.method === 'GET' && match[2] === 'strategies') { if (url.searchParams.get('view') !== 'global') return json(res, 403, { error:'global_view_required' }); return json(res, 200, getMatchStrategies(match[1])); }
-    if (req.method === 'POST' && match[2] === 'join') { const data = await body(req); try { return json(res, 200, joinPlayerMatch(match[1], Number(data.seatId), String(data.playerId || `h5-player-${data.seatId}`), data.displayName)); } catch (error) { return json(res, 400, {ok:false,error:error.message}); } }
-    if (req.method === 'POST' && match[2] === 'start') { const data = await body(req); try { return json(res, 200, startMatch(match[1], Number(data.seatId))); } catch (error) { return json(res, 400, {ok:false,error:error.message}); } }
-    if (req.method === 'POST' && match[2] === 'actions') { const data = await body(req); try { const state = submitMatchAction(match[1], Number(data.seatId), data.action, data.seq, { source:'player' }); return json(res, 200, { ok: true, seq: state.seq }); } catch (error) { return json(res, 400, { ok: false, error: error.message }); } }
-    if (req.method === 'POST' && match[2] === 'invites') { const data = await body(req); try { return json(res, 201, createMatchInvite(match[1], data.inviteType, data.seatId)); } catch (error) { return json(res, 400, {ok:false,error:error.message}); } }
+    if (req.method === 'POST' && match[2] === 'join') { const data = await body(req); try { const automatic = data.seatId === undefined || data.seatId === null || data.seatId === 'auto'; const options = { seatSessionToken:seatSession(req) }; return json(res, 200, automatic ? joinAvailablePlayerMatch(match[1], String(data.playerId || 'h5-player-auto'), data.displayName, options) : joinPlayerMatch(match[1], Number(data.seatId), String(data.playerId || `h5-player-${data.seatId}`), data.displayName, options)); } catch (error) { return json(res, 400, {ok:false,error:error.message}); } }
+    if (req.method === 'POST' && match[2] === 'start') { const data = await body(req); try { return json(res, 200, startMatch(match[1], Number(data.seatId), { seatSessionToken:seatSession(req) })); } catch (error) { return json(res, 400, {ok:false,error:error.message}); } }
+    if (req.method === 'POST' && match[2] === 'actions') { const data = await body(req); try { const state = submitMatchAction(match[1], Number(data.seatId), data.action, data.seq, { source:'player', seatSessionToken:seatSession(req) }); return json(res, 200, { ok: true, seq: state.seq }); } catch (error) { return json(res, 400, { ok: false, error: error.message }); } }
+    if (req.method === 'POST' && match[2] === 'invites') { const data = await body(req); try { return json(res, 201, createMatchInvite(match[1], data.inviteType, data.seatId, roomOwner(req))); } catch (error) { return json(res, error.message === 'room_owner_required' ? 403 : 400, {ok:false,error:error.message}); } }
     return json(res, 405, { error: 'method_not_allowed' });
   } catch (error) {
     const status = error instanceof SyntaxError ? 400 : 500;

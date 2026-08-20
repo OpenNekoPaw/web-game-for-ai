@@ -38,7 +38,7 @@ export const MCP_TOOLS = [
   tool('list_strategies', 'List optional server-catalog strategies. Local strategy files remain with the Agent.', {}),
   tool('create_game', 'Create a random Dou Dizhu game. accessMode defaults to open.', { properties: accessProperties, additionalProperties: false }),
   tool('create_rematch', 'Create a new game using the initial deal from a completed game.', {
-    properties: { sourceGameId: { type: 'string' } }, required: ['sourceGameId']
+    properties: { sourceGameId: { type: 'string' }, replayAccessToken: { type: 'string' } }, required: ['sourceGameId']
   }),
   tool('create_competition', 'Create a 3, 5, or 7-round Dou Dizhu competition.', {
     properties: { totalRounds: { type: 'integer', enum: [3, 5, 7] }, ...accessProperties }, additionalProperties: false
@@ -119,11 +119,11 @@ async function callTool(name, args) {
     case 'list_strategies': return text({ protocol: 'agent-game.v1', ...getStrategies() });
     case 'create_game': {
       const game = createMatch(args);
-      return text({ protocol: 'agent-game.v1', gameId: game.gameId, accessMode: game.accessMode, turnTimeoutMs: game.turnTimeoutMs });
+      return text({ protocol: 'agent-game.v1', gameId: game.gameId, accessMode: game.accessMode, replayAccessToken: game.replayAccessToken || undefined, roomOwnerToken: game.roomOwnerToken, turnTimeoutMs: game.turnTimeoutMs });
     }
     case 'create_rematch': {
-      const game = createRematch(args.sourceGameId);
-      return text({ protocol: 'agent-game.v1', gameId: game.gameId, sourceGameId: game.sourceGameId, turnTimeoutMs: game.turnTimeoutMs });
+      const game = createRematch(args.sourceGameId, args.replayAccessToken);
+      return text({ protocol: 'agent-game.v1', gameId: game.gameId, sourceGameId: game.sourceGameId, accessMode: game.accessMode, replayAccessToken: game.replayAccessToken || undefined, roomOwnerToken: game.roomOwnerToken, turnTimeoutMs: game.turnTimeoutMs });
     }
     case 'create_competition': return text(createCompetition(args));
     case 'join_invite': {

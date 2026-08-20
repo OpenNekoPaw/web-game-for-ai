@@ -1,11 +1,10 @@
 import {
   createCompetition, createMatch, createMatchInvite, createRematch, exportStoreState,
-  getMatch, getMatchStrategies, getReplay, getStrategies, importStoreState,
-  joinAgentInvite, joinMatch, joinPlayerInvite, joinPlayerMatch, observeCompetition,
-  observeMatch, resolveMatchInvite, startMatch, submitCompetitionReview,
+  getAuthorizedReplay, getMatch, getMatchStrategies, getStrategies, importStoreState,
+  joinAgentInvite, joinAvailablePlayerMatch, joinMatch, joinPlayerInvite, joinPlayerMatch, observeCompetition,
+  listAccessibleReplays, observeMatch, reconnectPlayerMatch, removeDisconnectedPlayer, resolveMatchInvite, startMatch, submitCompetitionReview,
   submitMatchAction, submitMatchReview
 } from './game/store.js';
-import { listReplays } from './game/replay-runtime.js';
 import { getStrategy } from './game/strategy-runtime.js';
 import { handleMcpMessage } from './server/mcp.js';
 
@@ -18,6 +17,11 @@ async function body(request) {
   return text ? JSON.parse(text) : {};
 }
 
+const replayAccess = (request) => String(request.headers.get('x-replay-access-token') || '').trim();
+const seatSession = (request) => String(request.headers.get('x-seat-session-token') || '').trim();
+const seatSessionSeat = (request) => request.headers.get('x-seat-session-seat');
+const roomOwner = (request) => String(request.headers.get('x-room-owner-token') || '').trim();
+
 export async function handleWorkerRequest(request) {
   const url = new URL(request.url);
   try {
@@ -27,13 +31,13 @@ export async function handleWorkerRequest(request) {
       return json({ protocol: 'agent-game.v1', format: 'agentskills', fileName: 'default.md', hash: strategy.hash, markdown: strategy.markdown });
     }
     if (request.method === 'GET' && url.pathname === '/agent/v1/strategies') return json({ protocol: 'agent-game.v1', ...getStrategies() });
-    if (request.method === 'GET' && url.pathname === '/api/replays') return json(listReplays({ limit: url.searchParams.get('limit'), offset: url.searchParams.get('offset'), status: url.searchParams.get('status') }));
+    if (request.method === 'GET' && url.pathname === '/api/replays') return json(listAccessibleReplays({ limit: url.searchParams.get('limit'), offset: url.searchParams.get('offset'), status: url.searchParams.get('status'), replayAccessToken: replayAccess(request) }));
 
     const browserInvite = url.pathname.match(/^\/api\/invites\/([^/]+)(?:\/(join))?$/);
     if (browserInvite) {
       try {
         if (request.method === 'GET' && !browserInvite[2]) return json(resolveMatchInvite(browserInvite[1]));
-        if (request.method === 'POST' && browserInvite[2] === 'join') { const data = await body(request); return json(joinPlayerInvite(browserInvite[1], data.playerId, data.displayName)); }
+        if (request.method === 'POST' && browserInvite[2] === 'join') { const data = await body(request); return json(joinPlayerInvite(browserInvite[1], data.playerId, data.displayName, seatSession(request))); }
       } catch (error) { return json({ protocol: 'agent-game.v1', ok: false, error: error.message }, error.message === 'invite_not_found' ? 404 : 400); }
     }
     const agentInvite = url.pathname.match(/^\/agent\/v1\/invites\/([^/]+)(?:\/(join))?$/);
@@ -60,10 +64,10 @@ export async function handleWorkerRequest(request) {
       catch (error) { return json({ error: error.message }, error.message === 'competition_not_found' ? 404 : 400); }
     }
     const replayMatch = url.pathname.match(/^\/api\/replays\/([^/]+)$/);
-    if (request.method === 'GET' && replayMatch) { try { return json(getReplay(replayMatch[1])); } catch (error) { return json({ error: error.message }, error.message === 'replay_not_found' ? 404 : 400); } }
+    if (request.method === 'GET' && replayMatch) { try { return json(getAuthorizedReplay(replayMatch[1], replayAccess(request))); } catch (error) { return json({ error: error.message }, error.message === 'replay_not_found' ? 404 : error.message === 'replay_access_denied' ? 403 : 400); } }
     const replayRematch = url.pathname.match(/^\/api\/replays\/([^/]+)\/rematch$/);
-    if (request.method === 'POST' && replayRematch) { try { await body(request); const game = createRematch(replayRematch[1]); return json({ protocol: 'agent-game.v1', gameId: game.gameId, sourceGameId: game.sourceGameId, turnTimeoutMs: game.turnTimeoutMs }, 201); } catch (error) { return json({ error: error.message }, error.message === 'replay_not_found' ? 404 : 400); } }
-    if (request.method === 'POST' && (url.pathname === '/api/games' || url.pathname === '/agent/v1/games')) { const game = createMatch(await body(request)); return json({ protocol: 'agent-game.v1', gameId: game.gameId, accessMode: game.accessMode, turnTimeoutMs: game.turnTimeoutMs }, 201); }
+    if (request.method === 'POST' && replayRematch) { try { await body(request); const game = createRematch(replayRematch[1], replayAccess(request)); return json({ protocol: 'agent-game.v1', gameId: game.gameId, sourceGameId: game.sourceGameId, accessMode: game.accessMode, replayAccessToken: game.replayAccessToken || undefined, roomOwnerToken: game.roomOwnerToken, turnTimeoutMs: game.turnTimeoutMs }, 201); } catch (error) { return json({ error: error.message }, error.message === 'replay_not_found' ? 404 : error.message === 'replay_access_denied' ? 403 : 400); } }
+    if (request.method === 'POST' && (url.pathname === '/api/games' || url.pathname === '/agent/v1/games')) { const game = createMatch(await body(request)); return json({ protocol: 'agent-game.v1', gameId: game.gameId, accessMode: game.accessMode, replayAccessToken: game.replayAccessToken || undefined, roomOwnerToken: game.roomOwnerToken, turnTimeoutMs: game.turnTimeoutMs }, 201); }
 
     const agentMatch = url.pathname.match(/^\/agent\/v1\/games\/([^/]+)\/(join|observe|start|actions|review)$/);
     if (agentMatch) {
@@ -78,16 +82,20 @@ export async function handleWorkerRequest(request) {
       } catch (error) { return json({ protocol: 'agent-game.v1', ok: false, error: error.message }, 400); }
     }
 
+    const reconnect = url.pathname.match(/^\/api\/games\/([^/]+)\/reconnect$/);
+    if (request.method === 'POST' && reconnect) { const data = await body(request); try { return json(reconnectPlayerMatch(reconnect[1], data.reconnectCode)); } catch (error) { return json({ ok: false, error: error.message }, 400); } }
+    const removePlayer = url.pathname.match(/^\/api\/games\/([^/]+)\/players\/([0-2])$/);
+    if (request.method === 'DELETE' && removePlayer) { try { return json(removeDisconnectedPlayer(removePlayer[1], Number(removePlayer[2]), roomOwner(request))); } catch (error) { return json({ ok: false, error: error.message }, error.message === 'room_owner_required' ? 403 : 400); } }
     const match = url.pathname.match(/^\/api\/games\/([^/]+)(?:\/(state|strategies|join|start|actions|invites))?$/);
     if (!match) return json({ error: 'not_found' }, 404);
     const game = getMatch(match[1]);
     if (!game) return json({ error: 'game_not_found' }, 404);
-    if (request.method === 'GET' && match[2] === 'state') { try { return json(observeMatch(match[1], Number(url.searchParams.get('seat')), { revealAll: url.searchParams.get('view') === 'global' })); } catch (error) { return json({ error: error.message }, 400); } }
+    if (request.method === 'GET' && match[2] === 'state') { try { return json(observeMatch(match[1], Number(url.searchParams.get('seat')), { revealAll: url.searchParams.get('view') === 'global', seatSessionToken:seatSession(request), controlSeatId:seatSessionSeat(request) })); } catch (error) { return json({ error: error.message }, 400); } }
     if (request.method === 'GET' && match[2] === 'strategies') { if (url.searchParams.get('view') !== 'global') return json({ error: 'global_view_required' }, 403); return json(getMatchStrategies(match[1])); }
-    if (request.method === 'POST' && match[2] === 'join') { const data = await body(request); try { return json(joinPlayerMatch(match[1], Number(data.seatId), String(data.playerId || `h5-player-${data.seatId}`), data.displayName)); } catch (error) { return json({ ok: false, error: error.message }, 400); } }
-    if (request.method === 'POST' && match[2] === 'start') { const data = await body(request); try { return json(startMatch(match[1], Number(data.seatId))); } catch (error) { return json({ ok: false, error: error.message }, 400); } }
-    if (request.method === 'POST' && match[2] === 'actions') { const data = await body(request); try { const state = submitMatchAction(match[1], Number(data.seatId), data.action, data.seq, { source: 'player' }); return json({ ok: true, seq: state.seq }); } catch (error) { return json({ ok: false, error: error.message }, 400); } }
-    if (request.method === 'POST' && match[2] === 'invites') { const data = await body(request); try { return json(createMatchInvite(match[1], data.inviteType, data.seatId), 201); } catch (error) { return json({ ok: false, error: error.message }, 400); } }
+    if (request.method === 'POST' && match[2] === 'join') { const data = await body(request); try { const automatic = data.seatId === undefined || data.seatId === null || data.seatId === 'auto'; const options = { seatSessionToken:seatSession(request) }; return json(automatic ? joinAvailablePlayerMatch(match[1], String(data.playerId || 'h5-player-auto'), data.displayName, options) : joinPlayerMatch(match[1], Number(data.seatId), String(data.playerId || `h5-player-${data.seatId}`), data.displayName, options)); } catch (error) { return json({ ok: false, error: error.message }, 400); } }
+    if (request.method === 'POST' && match[2] === 'start') { const data = await body(request); try { return json(startMatch(match[1], Number(data.seatId), { seatSessionToken:seatSession(request) })); } catch (error) { return json({ ok: false, error: error.message }, 400); } }
+    if (request.method === 'POST' && match[2] === 'actions') { const data = await body(request); try { const state = submitMatchAction(match[1], Number(data.seatId), data.action, data.seq, { source: 'player', seatSessionToken:seatSession(request) }); return json({ ok: true, seq: state.seq }); } catch (error) { return json({ ok: false, error: error.message }, 400); } }
+    if (request.method === 'POST' && match[2] === 'invites') { const data = await body(request); try { return json(createMatchInvite(match[1], data.inviteType, data.seatId, roomOwner(request)), 201); } catch (error) { return json({ ok: false, error: error.message }, error.message === 'room_owner_required' ? 403 : 400); } }
     return json({ error: 'method_not_allowed' }, 405);
   } catch (error) {
     return json({ error: error.message }, 500);

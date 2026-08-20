@@ -1,5 +1,5 @@
 import { applyAction, chooseSimpleAction, createDeck, createGame, publicState, startGame } from './ddz.js';
-import { appendReplayFrame, createReplay, exportReplayState, importReplayState, readReplay, updateReplayParticipants } from './replay-runtime.js';
+import { appendReplayFrame, createReplay, exportReplayState, importReplayState, listReplays, readReplay, updateReplayParticipants } from './replay-runtime.js';
 import { getStrategy, listStrategies } from './strategy-runtime.js';
 
 const games = new Map();
@@ -8,6 +8,8 @@ const invites = new Map();
 const DEFAULT_TURN_TIMEOUT_MS = 60_000;
 const MAX_TURN_TIMEOUT_MS = 60_000;
 const INVITE_TTL_MS = 30 * 60_000;
+const PLAYER_OFFLINE_MS = 10_000;
+const WAITING_SEAT_RELEASE_MS = 60_000;
 const ACCESS_MODES = new Set(['open', 'invite_only', 'private']);
 const configuredTurnTimeoutMs = normalizeTurnTimeout(globalThis.process?.env?.TURN_TIMEOUT_MS);
 let lastGameTimestamp = 0;
@@ -16,10 +18,13 @@ let lastCompetitionTimestamp = 0;
 export function createMatch(options = {}) {
   const game = createGame(nextGameId());
   game.accessMode = normalizeAccessMode(options.accessMode);
+  game.replayAccessToken = game.accessMode === 'open' ? null : normalizeReplayAccessToken(options.replayAccessToken) || createAccessToken();
+  game.roomOwnerToken = normalizeAccessToken(options.roomOwnerToken) || createAccessToken();
   game.allowedAgentIds = normalizeIdentitySet(options.allowedAgentIds);
   game.allowedPlayerIds = normalizeIdentitySet(options.allowedPlayerIds);
   game.agents = new Map();
   game.players = new Map();
+  game.playerSessions = new Map();
   game.displayNames = new Map();
   game.agentMetadata = new Map();
   game.ready = new Set();
@@ -47,6 +52,8 @@ export function createCompetition(options = {}) {
   const allowedAgentIds = [...normalizeIdentitySet(options.allowedAgentIds)];
   const allowedPlayerIds = [...normalizeIdentitySet(options.allowedPlayerIds)];
   const competitionId = nextCompetitionId();
+  const replayAccessToken = accessMode === 'open' ? null : createAccessToken();
+  const roomOwnerToken = createAccessToken();
   const competition = {
     competitionId,
     totalRounds,
@@ -62,22 +69,26 @@ export function createCompetition(options = {}) {
     accessMode,
     allowedAgentIds,
     allowedPlayerIds,
+    replayAccessToken,
+    roomOwnerToken,
     turnTimeoutMs: normalizeTurnTimeout(options.turnTimeoutMs ?? configuredTurnTimeoutMs)
   };
   competitions.set(competitionId, competition);
-  const game = createMatch({ competitionId, roundNumber: 1, turnTimeoutMs: competition.turnTimeoutMs, accessMode, allowedAgentIds, allowedPlayerIds });
+  const game = createMatch({ competitionId, roundNumber: 1, turnTimeoutMs: competition.turnTimeoutMs, accessMode, allowedAgentIds, allowedPlayerIds, replayAccessToken, roomOwnerToken });
   competition.currentGameId = game.gameId;
   competition.gameIds.push(game.gameId);
-  return observeCompetition(competitionId);
+  return { ...observeCompetition(competitionId), roomOwnerToken, ...(replayAccessToken ? { replayAccessToken } : {}) };
 }
 
-export function createRematch(sourceGameId) {
+export function createRematch(sourceGameId, replayAccessToken) {
   const replay = readReplay(sourceGameId);
+  assertReplayAccess(sourceGameId, replayAccessToken, replay);
   const finalState = replay.frames.at(-1)?.state;
   if (finalState?.phase !== 'over' || !['landlord', 'farmers'].includes(finalState.winner)) throw new Error('rematch_source_not_completed');
   const presetDeal = extractReplayDeal(replay);
   const rootSourceGameId = replay.sourceGameId || finalState.sourceGameId || sourceGameId;
-  return createMatch({ sourceGameId: rootSourceGameId, presetDeal });
+  const accessMode = replayAccessMode(sourceGameId, replay) === 'open' ? 'open' : 'invite_only';
+  return createMatch({ sourceGameId: rootSourceGameId, presetDeal, accessMode });
 }
 
 export function observeCompetition(competitionId, seatId = null, options = {}) {
@@ -140,7 +151,16 @@ export function importStoreState(snapshot = {}) {
   const decoded = JSON.parse(JSON.stringify(snapshot), snapshotReviver);
   games.clear(); competitions.clear(); invites.clear();
   for (const [id, game] of decoded.games || []) games.set(id, hydrateGame(game));
-  for (const [id, competition] of decoded.competitions || []) competitions.set(id, competition);
+  for (const [id, competition] of decoded.competitions || []) {
+    competition.roomOwnerToken = normalizeAccessToken(competition.roomOwnerToken)
+      || games.get(competition.currentGameId)?.roomOwnerToken
+      || createAccessToken();
+    for (const gameId of competition.gameIds || []) {
+      const game = games.get(gameId);
+      if (game) game.roomOwnerToken = competition.roomOwnerToken;
+    }
+    competitions.set(id, competition);
+  }
   for (const [id, invite] of decoded.invites || []) invites.set(id, invite);
   lastGameTimestamp = decoded.lastGameTimestamp || 0;
   lastCompetitionTimestamp = decoded.lastCompetitionTimestamp || 0;
@@ -189,17 +209,20 @@ export function joinMatch(gameId, seatId, agentId, strategyId, displayName, opti
   } else if (!game.agentStrategies.has(seatId)) game.agentStrategies.set(seatId, getStrategy(strategyId));
   else if (strategyId && game.agentStrategies.get(seatId).id !== strategyId) throw new Error('strategy_mismatch');
   updateReplayParticipants(gameId, participants(game));
-  return observeMatch(gameId, seatId);
+  return withReplayAccess(game, observeMatch(gameId, seatId));
 }
 
-export function createMatchInvite(gameId, inviteType, seatId = 0) {
+export function createMatchInvite(gameId, inviteType, seatId, roomOwnerToken) {
   const game = requireMatch(gameId);
+  assertRoomOwner(game, roomOwnerToken);
   if (!['player', 'agent', 'spectator'].includes(inviteType)) throw new Error('invalid_invite_type');
-  const normalizedSeat = Number(seatId);
-  validateSeat(normalizedSeat);
+  const autoAssign = inviteType === 'player' && (seatId === undefined || seatId === null || seatId === 'auto');
+  const normalizedSeat = autoAssign ? null : Number(seatId ?? (inviteType === 'spectator' ? 0 : Number.NaN));
+  if (normalizedSeat !== null) validateSeat(normalizedSeat);
   if (inviteType !== 'spectator') {
     if (game.phase !== 'waiting') throw new Error('game_already_started');
-    if (occupiedSeats(game).includes(normalizedSeat)) throw new Error('seat_occupied');
+    if (normalizedSeat !== null && occupiedSeats(game).includes(normalizedSeat)) throw new Error('seat_occupied');
+    if (normalizedSeat === null && occupiedSeats(game).length === 3) throw new Error('room_full');
   }
   const now = Date.now();
   pruneExpiredInvites(now);
@@ -208,6 +231,7 @@ export function createMatchInvite(gameId, inviteType, seatId = 0) {
     inviteType,
     gameId,
     seatId: normalizedSeat,
+    assignedSeat: null,
     competitionId: game.competitionId,
     createdAt: now,
     expiresAt: now + INVITE_TTL_MS,
@@ -230,36 +254,85 @@ export function joinAgentInvite(token, agentId, displayName, agentMetadata) {
   return { invite: publicInvite(invite), ...result };
 }
 
-export function joinPlayerInvite(token, playerId, displayName) {
+export function joinPlayerInvite(token, playerId, displayName, seatSessionToken) {
   const invite = requireInvite(token, 'player');
-  const identity = normalizeInviteIdentity(playerId, `h5-player-${invite.seatId}`);
+  const identity = normalizeInviteIdentity(playerId, 'h5-player-auto');
   assertInviteIdentity(invite, identity);
-  const result = joinPlayerMatch(invite.gameId, invite.seatId, identity, displayName, { viaInvite: true });
+  const game = requireMatch(invite.gameId);
+  const targetSeat = invite.assignedSeat ?? invite.seatId ?? [0, 1, 2].find((seatId) => !occupiedSeats(game).includes(seatId));
+  if (targetSeat === undefined) throw new Error('room_full');
+  const result = joinPlayerMatch(invite.gameId, targetSeat, identity, displayName, { viaInvite: !game.playerSessions.has(targetSeat), seatSessionToken });
   invite.usedBy ||= identity;
+  invite.assignedSeat ??= targetSeat;
   return { invite: publicInvite(invite), ...result };
 }
 
 export function joinPlayerMatch(gameId, seatId, playerId, displayName, options = {}) {
   const game = requireMatch(gameId);
   validateSeat(seatId);
-  assertSeatAdmission(game, 'player', playerId, options.viaInvite === true);
   if (game.agents.has(seatId)) throw new Error('seat_occupied');
   const occupant = game.players.get(seatId);
   if (occupant && occupant !== playerId) throw new Error('seat_occupied');
+  // Rejoining an already claimed seat is idempotent. This lets the same browser
+  // recover after a refresh without requiring the original short-lived invite.
+  if (!occupant) assertSeatAdmission(game, 'player', playerId, options.viaInvite === true);
+  const existingSession = game.playerSessions.get(seatId);
+  if (occupant && existingSession && !existingSession.legacy && !options.viaInvite) {
+    assertSeatSession(game, seatId, options.seatSessionToken);
+  }
   const resolvedDisplayName = game.displayNames.has(seatId) && displayName === undefined
     ? game.displayNames.get(seatId)
     : normalizeDisplayName(displayName, `玩家 ${['A', 'B', 'C'][seatId]}`);
   game.players.set(seatId, playerId);
   game.displayNames.set(seatId, resolvedDisplayName);
+  const session = ensurePlayerSession(game, seatId);
+  session.lastSeenAt = Date.now();
   updateReplayParticipants(gameId, participants(game));
+  return withPlayerSession(game, seatId, withReplayAccess(game, observeMatch(gameId, seatId, { seatSessionToken: session.token })));
+}
+
+export function joinAvailablePlayerMatch(gameId, playerId, displayName, options = {}) {
+  const game = requireMatch(gameId);
+  const identity = normalizeInviteIdentity(playerId, 'h5-player-auto');
+  const existingSeat = [...game.players.entries()].find(([, occupant]) => occupant === identity)?.[0];
+  if (existingSeat !== undefined) return joinPlayerMatch(gameId, existingSeat, identity, displayName, options);
+  const targetSeat = [0, 1, 2].find((seatId) => !occupiedSeats(game).includes(seatId));
+  if (targetSeat === undefined) throw new Error('room_full');
+  return joinPlayerMatch(gameId, targetSeat, identity, displayName, options);
+}
+
+export function reconnectPlayerMatch(gameId, reconnectCode) {
+  const game = requireMatch(gameId);
+  maintainPlayerPresence(game);
+  const normalizedCode = normalizeReconnectCode(reconnectCode);
+  const entry = [...game.playerSessions.entries()].find(([, session]) => session.reconnectCode === normalizedCode);
+  if (!entry) throw new Error('invalid_reconnect_code');
+  const [seatId, session] = entry;
+  if (!game.players.has(seatId)) throw new Error('seat_not_joined');
+  session.token = createAccessToken();
+  session.reconnectCode = createReconnectCode(game);
+  session.lastSeenAt = Date.now();
+  return withPlayerSession(game, seatId, withReplayAccess(game, observeMatch(gameId, seatId, { seatSessionToken: session.token })));
+}
+
+export function removeDisconnectedPlayer(gameId, seatId, roomOwnerToken, now = Date.now()) {
+  const game = requireMatch(gameId);
+  validateSeat(seatId);
+  assertRoomOwner(game, roomOwnerToken);
+  if (game.phase !== 'waiting') throw new Error('game_already_started');
+  if (!game.players.has(seatId)) throw new Error('player_not_joined');
+  if (!isPlayerOffline(game, seatId, now)) throw new Error('player_still_online');
+  releasePlayerSeat(game, seatId, 'owner_removed', now);
   return observeMatch(gameId, seatId);
 }
 
-export function startMatch(gameId, seatId = null) {
+export function startMatch(gameId, seatId = null, options = {}) {
   const game = requireMatch(gameId);
+  maintainPlayerPresence(game);
   if (game.phase !== 'waiting') throw new Error('game_already_started');
   validateSeat(seatId);
   if (!occupiedSeats(game).includes(seatId)) throw new Error('seat_not_joined');
+  assertControllerSession(game, seatId, options.seatSessionToken);
   const wasReady = game.ready.has(seatId);
   game.ready.add(seatId);
   if (occupiedSeats(game).length === 3 && game.ready.size === 3) {
@@ -273,6 +346,9 @@ export function startMatch(gameId, seatId = null) {
 
 export function observeMatch(gameId, seatId, options = {}) {
   const game = requireMatch(gameId);
+  maintainPlayerPresence(game);
+  const controlSeat = options.controlSeatId === undefined ? seatId : Number(options.controlSeatId);
+  const controlAuthorized = touchAuthorizedPlayer(game, controlSeat, options.seatSessionToken);
   advanceTimedOutTurn(game);
   validateSeat(seatId);
   const isYourTurn = game.phase !== 'waiting' && game.current === seatId && game.winner === null;
@@ -281,7 +357,7 @@ export function observeMatch(gameId, seatId, options = {}) {
     : [{ type: 'play', cards: 'select from your hand' }, ...(game.lastPlay ? [{ type: 'pass' }] : [])];
   const readySeats = [...game.ready].sort();
   const reviewContext = game.phase === 'over' && game.agents.has(seatId) ? buildReviewContext(game, seatId) : null;
-  return { protocol: 'agent-game.v1', ...publicState(game, seatId, options.revealAll === true), accessMode: game.accessMode, view: options.revealAll === true ? 'global' : 'player', you: seatId, roleContext: roleContext(game, seatId), isYourTurn, allowedActions, agentSeats: Object.fromEntries(game.agents), playerSeats: Object.fromEntries(game.players), seatControllers: seatControllers(game), readySeats, allReady: readySeats.length === 3, settlement: structuredClone(game.settlement), competition: game.competitionId ? competitionStateForGame(game, seatId, options.revealAll === true) : null, strategy: game.agentStrategies.has(seatId) ? structuredClone(game.agentStrategies.get(seatId)) : null, strategyAssignments: options.revealAll === true ? strategyAssignments(game) : {}, decisions: options.revealAll === true ? structuredClone(game.decisions) : [], reviews: options.revealAll === true ? reviews(game) : game.reviews.has(seatId) ? { [seatId]: structuredClone(game.reviews.get(seatId)) } : {}, reviewStatus: reviewStatus(game), reviewContext, turnTimeoutMs: game.turnTimeoutMs, turnStartedAt: game.turnStartedAt, turnDeadlineAt: game.turnDeadlineAt, serverNow: Date.now() };
+  return { protocol: 'agent-game.v1', ...publicState(game, seatId, options.revealAll === true), accessMode: game.accessMode, view: options.revealAll === true ? 'global' : 'player', you: seatId, controlAuthorized, controlledSeat: controlAuthorized ? Number(controlSeat) : null, roleContext: roleContext(game, seatId), isYourTurn, allowedActions, agentSeats: Object.fromEntries(game.agents), playerSeats: Object.fromEntries(game.players), seatControllers: seatControllers(game), seatPresence: seatPresence(game), readySeats, allReady: readySeats.length === 3, settlement: structuredClone(game.settlement), competition: game.competitionId ? competitionStateForGame(game, seatId, options.revealAll === true) : null, strategy: game.agentStrategies.has(seatId) ? structuredClone(game.agentStrategies.get(seatId)) : null, strategyAssignments: options.revealAll === true ? strategyAssignments(game) : {}, decisions: options.revealAll === true ? structuredClone(game.decisions) : [], reviews: options.revealAll === true ? reviews(game) : game.reviews.has(seatId) ? { [seatId]: structuredClone(game.reviews.get(seatId)) } : {}, reviewStatus: reviewStatus(game), reviewContext, turnTimeoutMs: game.turnTimeoutMs, turnStartedAt: game.turnStartedAt, turnDeadlineAt: game.turnDeadlineAt, serverNow: Date.now() };
 }
 
 export function getMatchStrategies(gameId) {
@@ -295,8 +371,10 @@ export function getMatchStrategies(gameId) {
 
 export function submitMatchAction(gameId, seatId, action, expectedSeq, options = {}) {
   const game = requireMatch(gameId);
-  advanceTimedOutTurn(game);
+  maintainPlayerPresence(game);
   validateSeat(seatId);
+  assertControllerSession(game, seatId, options.seatSessionToken);
+  advanceTimedOutTurn(game);
   if (expectedSeq !== undefined && expectedSeq !== game.seq) throw new Error('stale_state');
   const decision = normalizeDecision(options.decision);
   const phase = game.phase;
@@ -398,8 +476,27 @@ export function getReplay(gameId) {
   return readReplay(gameId);
 }
 
-export function tickMatches() {
-  for (const game of games.values()) advanceTimedOutTurn(game);
+export function getAuthorizedReplay(gameId, replayAccessToken) {
+  const replay = readReplay(gameId);
+  assertReplayAccess(gameId, replayAccessToken, replay);
+  return replay;
+}
+
+export function listAccessibleReplays(options = {}) {
+  const limit = Math.min(100, Math.max(1, Number(options.limit) || 50));
+  const offset = Math.max(0, Number(options.offset) || 0);
+  const status = options.status === 'completed' ? 'completed' : 'all';
+  const token = normalizeReplayAccessToken(options.replayAccessToken);
+  const all = listReplays({ limit: 100, offset: 0, status, accessMode: 'all' }).items;
+  const items = all.filter((item) => item.accessMode === 'open' || replayAccessGranted(item.gameId, token));
+  return { total: items.length, offset, limit, status, accessMode: token ? 'authorized' : 'open', items: items.slice(offset, offset + limit) };
+}
+
+export function tickMatches(now = Date.now()) {
+  for (const game of games.values()) {
+    maintainPlayerPresence(game, now);
+    advanceTimedOutTurn(game, now);
+  }
 }
 
 export function advanceMatchTimeout(gameId, now = Date.now()) {
@@ -409,7 +506,8 @@ export function advanceMatchTimeout(gameId, now = Date.now()) {
 function advanceTimedOutTurn(game, now = Date.now()) {
   if (game.phase === 'waiting') { clearTurnClock(game); return null; }
   ensureTurnClock(game, now);
-  if (game.winner !== null || game.turnDeadlineAt === null || now < game.turnDeadlineAt) return null;
+  const managed = isPlayerOffline(game, game.current, now);
+  if (game.winner !== null || game.turnDeadlineAt === null || (!managed && now < game.turnDeadlineAt)) return null;
   const seatId = game.current;
   const bidStage = game.bidStage;
   const action = game.phase === 'bid'
@@ -419,11 +517,12 @@ function advanceTimedOutTurn(game, now = Date.now()) {
       : chooseSimpleAction(game, seatId);
   applyAction(game, seatId, action);
   settleGame(game);
-  game.actionHistory.push({ seq: game.seq, at: now, seatId, source: 'timeout', phase: game.phase, action: structuredClone(action) });
-  game.log.push(`座位${seatId} 回合超时，自动${action.type === 'pass' ? '不要' : action.type === 'bid' ? bidStage === 'rob' ? '不抢' : '不叫' : '出牌'}`);
+  const source = managed ? 'managed' : 'timeout';
+  game.actionHistory.push({ seq: game.seq, at: now, seatId, source, phase: game.phase, action: structuredClone(action) });
+  game.log.push(`座位${seatId} ${managed ? '掉线托管' : '回合超时'}，自动${action.type === 'pass' ? '不要' : action.type === 'bid' ? bidStage === 'rob' ? '不抢' : '不叫' : '出牌'}`);
   resetTurnClock(game, now);
-  recordFrame(game, { type: 'action', source: 'timeout', seatId, action }, now);
-  return { seatId, seq: game.seq, timedOut: true };
+  recordFrame(game, { type: 'action', source, seatId, action }, now);
+  return { seatId, seq: game.seq, timedOut: !managed, managed };
 }
 
 function recordFrame(game, event, now = Date.now()) {
@@ -443,6 +542,7 @@ function replayState(game, now = Date.now()) {
     agentSeats: Object.fromEntries(game.agents),
     playerSeats: Object.fromEntries(game.players),
     seatControllers: seatControllers(game),
+    seatPresence: seatPresence(game, now),
     readySeats: [...game.ready].sort(),
     allReady: game.ready.size === 3,
     settlement: structuredClone(game.settlement),
@@ -509,6 +609,103 @@ function seatControllers(game) {
         ...(game.agentMetadata?.has(seatId) ? { agentMetadata: structuredClone(game.agentMetadata.get(seatId)) } : {})
       }
     : { type: 'player', id: game.players.get(seatId), displayName: game.displayNames?.get(seatId) || `玩家 ${['A', 'B', 'C'][seatId]}` }]));
+}
+
+function seatPresence(game, now = Date.now()) {
+  return Object.fromEntries(occupiedSeats(game).map((seatId) => {
+    if (game.agents.has(seatId)) return [seatId, { status: 'online', controllerType: 'agent' }];
+    const offline = isPlayerOffline(game, seatId, now);
+    return [seatId, {
+      status: offline ? (game.phase === 'waiting' ? 'offline' : 'managed') : 'online',
+      controllerType: 'player'
+    }];
+  }));
+}
+
+function ensurePlayerSession(game, seatId) {
+  let session = game.playerSessions.get(seatId);
+  if (!session || session.legacy || !normalizeAccessToken(session.token)) {
+    session = { token: createAccessToken(), reconnectCode: createReconnectCode(game), lastSeenAt: Date.now() };
+    game.playerSessions.set(seatId, session);
+  }
+  return session;
+}
+
+function withPlayerSession(game, seatId, result) {
+  const session = ensurePlayerSession(game, seatId);
+  return { ...result, seatSessionToken: session.token, reconnectCode: session.reconnectCode };
+}
+
+function normalizeAccessToken(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{32,128}$/.test(value) ? value : null;
+}
+
+function normalizeReconnectCode(value) {
+  const code = String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!/^[A-Z0-9]{8}$/.test(code)) throw new Error('invalid_reconnect_code');
+  return code;
+}
+
+function createReconnectCode(game) {
+  const alphabet = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+  let code;
+  do {
+    const bytes = new Uint8Array(8);
+    crypto.getRandomValues(bytes);
+    code = [...bytes].map((value) => alphabet[value % alphabet.length]).join('');
+  } while ([...game.playerSessions.values()].some((session) => session.reconnectCode === code));
+  return code;
+}
+
+function assertSeatSession(game, seatId, token) {
+  const session = game.playerSessions.get(seatId);
+  if (!session || !normalizeAccessToken(token) || session.token !== token) throw new Error('seat_session_required');
+  return session;
+}
+
+function assertControllerSession(game, seatId, token) {
+  if (!game.players.has(seatId)) return;
+  const session = assertSeatSession(game, seatId, token);
+  session.lastSeenAt = Date.now();
+}
+
+function touchAuthorizedPlayer(game, seatId, token) {
+  const normalizedSeat = Number(seatId);
+  if (![0, 1, 2].includes(normalizedSeat) || !game.players.has(normalizedSeat)) return false;
+  const session = game.playerSessions.get(normalizedSeat);
+  if (!session || session.token !== normalizeAccessToken(token)) return false;
+  session.lastSeenAt = Date.now();
+  return true;
+}
+
+function isPlayerOffline(game, seatId, now = Date.now()) {
+  if (!game.players.has(seatId)) return false;
+  const session = game.playerSessions.get(seatId);
+  return !session || now - Number(session.lastSeenAt || 0) >= PLAYER_OFFLINE_MS;
+}
+
+function maintainPlayerPresence(game, now = Date.now()) {
+  if (game.phase !== 'waiting') return;
+  for (const seatId of [...game.players.keys()]) {
+    const session = game.playerSessions.get(seatId);
+    if (!session || now - Number(session.lastSeenAt || 0) >= WAITING_SEAT_RELEASE_MS) {
+      releasePlayerSeat(game, seatId, 'disconnect_timeout', now);
+    }
+  }
+}
+
+function releasePlayerSeat(game, seatId, reason, now = Date.now()) {
+  const playerId = game.players.get(seatId);
+  game.players.delete(seatId);
+  game.playerSessions.delete(seatId);
+  game.displayNames.delete(seatId);
+  game.ready.delete(seatId);
+  updateReplayParticipants(game.gameId, participants(game));
+  recordFrame(game, { type: 'seat_released', seatId, playerId, reason }, now);
+}
+
+function assertRoomOwner(game, token) {
+  if (!normalizeAccessToken(token) || token !== game.roomOwnerToken) throw new Error('room_owner_required');
 }
 
 export function roleContext(game, seatId) {
@@ -649,10 +846,13 @@ function advanceCompetitionAfterRound(game) {
     turnTimeoutMs: competition.turnTimeoutMs,
     accessMode: competition.accessMode,
     allowedAgentIds: competition.allowedAgentIds,
-    allowedPlayerIds: competition.allowedPlayerIds
+    allowedPlayerIds: competition.allowedPlayerIds,
+    replayAccessToken: competition.replayAccessToken,
+    roomOwnerToken: competition.roomOwnerToken
   });
   nextGame.agents = new Map(game.agents);
   nextGame.players = new Map(game.players);
+  nextGame.playerSessions = new Map([...game.playerSessions].map(([seatId, session]) => [seatId, structuredClone(session)]));
   nextGame.displayNames = new Map(game.displayNames);
   nextGame.agentMetadata = new Map([...game.agentMetadata].map(([seatId, metadata]) => [seatId, structuredClone(metadata)]));
   nextGame.agentStrategies = new Map([...game.agentStrategies].map(([seatId, strategy]) => [seatId, structuredClone(strategy)]));
@@ -822,10 +1022,46 @@ function sameMetadata(left, right) {
 
 function hydrateGame(game) {
   game.accessMode = normalizeAccessMode(game.accessMode);
+  game.replayAccessToken = game.accessMode === 'open' ? null : normalizeReplayAccessToken(game.replayAccessToken) || createAccessToken();
+  game.roomOwnerToken = normalizeAccessToken(game.roomOwnerToken) || createAccessToken();
   game.allowedAgentIds = game.allowedAgentIds instanceof Set ? game.allowedAgentIds : normalizeIdentitySet(game.allowedAgentIds);
   game.allowedPlayerIds = game.allowedPlayerIds instanceof Set ? game.allowedPlayerIds : normalizeIdentitySet(game.allowedPlayerIds);
   game.agentMetadata = game.agentMetadata instanceof Map ? game.agentMetadata : new Map();
+  game.playerSessions = game.playerSessions instanceof Map ? game.playerSessions : new Map();
+  for (const seatId of game.players?.keys?.() || []) {
+    if (!game.playerSessions.has(seatId)) game.playerSessions.set(seatId, { token: null, reconnectCode: null, lastSeenAt: Date.now(), legacy: true });
+  }
   return game;
+}
+
+function withReplayAccess(game, result) {
+  return { ...result, ...(game.replayAccessToken ? { replayAccessToken: game.replayAccessToken } : {}) };
+}
+
+function createAccessToken() {
+  return crypto.randomUUID().replaceAll('-', '');
+}
+
+function normalizeReplayAccessToken(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{32,128}$/.test(value) ? value : null;
+}
+
+function replayAccessMode(gameId, replay = null) {
+  const game = games.get(gameId);
+  if (game) return game.accessMode || 'open';
+  const finalState = (replay || readReplay(gameId)).frames.at(-1)?.state;
+  return finalState?.accessMode || 'open';
+}
+
+function replayAccessGranted(gameId, replayAccessToken) {
+  if (replayAccessMode(gameId) === 'open') return true;
+  const game = games.get(gameId);
+  return Boolean(game?.replayAccessToken && replayAccessToken === game.replayAccessToken);
+}
+
+function assertReplayAccess(gameId, replayAccessToken, replay = null) {
+  if (replayAccessMode(gameId, replay) === 'open') return;
+  if (!replayAccessGranted(gameId, normalizeReplayAccessToken(replayAccessToken))) throw new Error('replay_access_denied');
 }
 
 function normalizeDisplayName(value, fallback) {
@@ -912,18 +1148,24 @@ function pruneExpiredInvites(now) {
 
 function publicInvite(invite) {
   const game = requireMatch(invite.gameId);
-  const occupied = invite.inviteType === 'spectator' ? false : occupiedSeats(game).includes(invite.seatId);
+  const resolvedSeat = invite.assignedSeat ?? invite.seatId;
+  const occupied = invite.inviteType === 'spectator' || resolvedSeat === null
+    ? false
+    : occupiedSeats(game).includes(resolvedSeat);
+  const roomHasSpace = occupiedSeats(game).length < 3;
+  const autoAssign = invite.inviteType === 'player' && invite.seatId === null;
   return {
     protocol: 'agent-game.invite.v1',
     token: invite.token,
     inviteType: invite.inviteType,
     gameId: invite.gameId,
-    seatId: invite.seatId,
+    seatId: resolvedSeat,
+    seatMode: autoAssign ? 'auto' : 'fixed',
     competitionId: invite.competitionId,
     view: invite.inviteType === 'spectator' ? 'global' : 'player',
     expiresAt: invite.expiresAt,
     singleUse: invite.inviteType !== 'spectator',
-    available: invite.inviteType === 'spectator' || (!occupied && !invite.usedBy)
+    available: invite.inviteType === 'spectator' || (!invite.usedBy && (autoAssign ? roomHasSpace : !occupied))
   };
 }
 
