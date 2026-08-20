@@ -36,7 +36,21 @@ let agentGuide = null;
 let agentGuideLoading = false;
 
 const $ = (id) => document.getElementById(id);
-const post = (path, data = {}, headers = {}) => fetch(path, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(data) }).then(async (response) => ({ response, data: await response.json() }));
+async function readJson(response) {
+  const body = await response.text();
+  if (!body.trim()) throw new Error('service_empty_response');
+  try {
+    return JSON.parse(body);
+  } catch {
+    const contentType = response.headers.get('content-type') || '';
+    const returnedHtml = contentType.includes('text/html') || /^\s*<(?:!doctype|html)\b/i.test(body);
+    throw new Error(returnedHtml ? 'service_returned_html' : 'invalid_service_response');
+  }
+}
+const post = async (path, data = {}, headers = {}) => {
+  const response = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(data) });
+  return { response, data: await readJson(response) };
+};
 
 function normalizeSeat(value) { const parsed = Number(value); return [0, 1, 2].includes(parsed) ? parsed : 0; }
 function normalizeView(value) { return value === 'global' ? 'global' : 'player'; }
@@ -134,7 +148,7 @@ async function createInvite(inviteType, seatId) {
 
 async function resolveInvite() {
   const response = await fetch(`/api/invites/${encodeURIComponent(inviteToken)}`);
-  const data = await response.json();
+  const data = await readJson(response);
   if (!response.ok) throw new Error(data.error || 'invite_not_found');
   if (!['player', 'spectator'].includes(data.inviteType)) throw new Error('invite_type_mismatch');
   activeInvite = data;
@@ -168,7 +182,7 @@ async function loadAgentGuide() {
   agentGuideLoading = true;
   try {
     const response = await fetch('/api/agent-guide');
-    const data = await response.json();
+    const data = await readJson(response);
     if (!response.ok) throw new Error(data.error || 'agent_guide_failed');
     agentGuide = data;
   } catch (error) {
@@ -515,7 +529,7 @@ async function removeOfflinePlayer(seatId) {
   if (!ownerToken) return showMessage('只有房主可以移除掉线玩家', true);
   try {
     const response = await fetch(`/api/games/${encodeURIComponent(gameId)}/players/${seatId}`, { method: 'DELETE', headers: { 'x-room-owner-token': ownerToken } });
-    const data = await response.json();
+    const data = await readJson(response);
     if (!response.ok) throw new Error(data.error || 'remove_failed');
     showMessage(`已移除掉线玩家 ${['A', 'B', 'C'][seatId]}`);
     await refresh();
@@ -525,7 +539,7 @@ async function removeOfflinePlayer(seatId) {
 async function loadReplay() {
   try {
     const response = await fetch(`/api/replays/${encodeURIComponent(replayGameId)}`, { headers: replayAccessHeaders(replayGameId) });
-    const data = await response.json();
+    const data = await readJson(response);
     if (!response.ok) throw new Error(data.error || 'replay_failed');
     if (!Array.isArray(data.frames) || !data.frames.length) throw new Error('empty_replay');
     replay = data;
@@ -608,7 +622,7 @@ async function refresh() {
     await ensurePlayerJoined();
     const stateUrl = new URL(`/api/games/${gameId}/state`, location.origin); stateUrl.searchParams.set('seat', seat); if (view === 'global') stateUrl.searchParams.set('view', 'global');
     const response = await fetch(stateUrl, { headers: seatSessionHeaders(competitionId || gameId, seat) });
-    const data = await response.json();
+    const data = await readJson(response);
     if (!response.ok) { if (data.error === 'game_not_found') return create(1, { confirmed: false, owner: true }); throw new Error(data.error || 'state_failed'); }
     if (data.competition?.competitionId) competitionId = data.competition.competitionId;
     if (data.competition?.currentGameId && data.competition.currentGameId !== gameId) {
@@ -634,7 +648,7 @@ async function refresh() {
   finally { refreshing = false; }
 }
 
-function setConnectionError(error) { showMessage(`无法连接服务：${error.message}`, true); }
+function setConnectionError(error) { showMessage(`无法连接服务：${errorText(error.message)}`, true); }
 
 function playerPosition(id) { return id === seat ? 'self' : id === (seat + 2) % 3 ? 'left' : 'right'; }
 
@@ -760,7 +774,7 @@ async function loadStrategyDetails(force = false) {
   renderStrategyDocument();
   try {
     const response = await fetch(`/api/games/${encodeURIComponent(gameId)}/strategies?view=global`);
-    const data = await response.json();
+    const data = await readJson(response);
     if (!response.ok) throw new Error(data.error || 'strategy_load_failed');
     strategyParticipants = data.participants || {};
     strategySnapshotGameId = data.gameId;
@@ -973,7 +987,7 @@ async function loadHistory() {
   list.innerHTML = '<p class="decision-empty">正在加载历史对局…</p>';
   try {
     const response = await fetch('/api/replays?limit=50&status=completed', { headers: replayAccessHeaders() });
-    const data = await response.json();
+    const data = await readJson(response);
     if (!response.ok) throw new Error(data.error || 'history_failed');
     $('game-record').textContent = data.total ? `对局记录 ${data.total}` : '对局记录';
     list.innerHTML = '';
@@ -1297,7 +1311,7 @@ async function action(payload) {
   catch (error) { setConnectionError(error); }
 }
 
-function errorText(error) { return ({ invalid_action:'动作格式错误', illegal_play:'这组牌不能出', cannot_pass_first:'你需要先出牌', cards_not_in_hand:'手牌状态已变化', not_your_turn:'还没轮到你', invalid_bid:'叫地主动作无效', game_not_started:'对局还未开始', players_not_ready:'请等待三家全部准备就绪', game_already_started:'对局已经开始', seat_occupied:'座位已被占用', room_full:'房间已满', seat_not_joined:'请先加入一个座位', player_not_joined:'该座位不是玩家座位', player_still_online:'玩家仍在线，不能移除', seat_session_required:'座位凭证无效，请使用重连码恢复', invalid_reconnect_code:'重连码无效或座位已释放', room_owner_required:'只有房主可以执行该操作', invite_required:'该对局仅允许通过邀请加入', invite_used:'邀请已被其他玩家使用', invite_expired:'邀请已过期', replay_access_denied:'无权查看该私人对局记录', access_denied:'当前身份无权加入该私有对局', invalid_access_mode:'接入模式无效', invalid_agent_metadata:'Agent 信息格式无效', agent_metadata_locked:'座位准备后不能修改 Agent 信息', rematch_source_not_completed:'只能复战已完成的对局', rematch_source_invalid:'来源对局缺少有效初始牌局' }[error] || error || '动作未接受'); }
+function errorText(error) { return ({ invalid_action:'动作格式错误', illegal_play:'这组牌不能出', cannot_pass_first:'你需要先出牌', cards_not_in_hand:'手牌状态已变化', not_your_turn:'还没轮到你', invalid_bid:'叫地主动作无效', game_not_started:'对局还未开始', players_not_ready:'请等待三家全部准备就绪', game_already_started:'对局已经开始', seat_occupied:'座位已被占用', room_full:'房间已满', seat_not_joined:'请先加入一个座位', player_not_joined:'该座位不是玩家座位', player_still_online:'玩家仍在线，不能移除', seat_session_required:'座位凭证无效，请使用重连码恢复', invalid_reconnect_code:'重连码无效或座位已释放', room_owner_required:'只有房主可以执行该操作', invite_required:'该对局仅允许通过邀请加入', invite_used:'邀请已被其他玩家使用', invite_expired:'邀请已过期', replay_access_denied:'无权查看该私人对局记录', access_denied:'当前身份无权加入该私有对局', invalid_access_mode:'接入模式无效', invalid_agent_metadata:'Agent 信息格式无效', agent_metadata_locked:'座位准备后不能修改 Agent 信息', rematch_source_not_completed:'只能复战已完成的对局', rematch_source_invalid:'来源对局缺少有效初始牌局', service_returned_html:'服务正在更新或路由异常，请刷新后重试', invalid_service_response:'服务返回了无法识别的数据，请稍后重试', service_empty_response:'服务未返回数据，请稍后重试' }[error] || error || '动作未接受'); }
 function switchSeat(nextSeat) { seat = normalizeSeat(nextSeat); selected.clear(); syncUrl(); replayMode ? render() : refresh(); }
 function switchView(nextView) { view = normalizeView(nextView); selected.clear(); syncUrl(); replayMode ? render() : refresh(); }
 function openReplay(targetGameId) {
@@ -1319,7 +1333,7 @@ async function createReplayRematch() {
   button.textContent = '创建中…';
   try {
     const response = await fetch(`/api/replays/${encodeURIComponent(sourceGameId)}/rematch`, { method: 'POST', headers: replayAccessHeaders(sourceGameId) });
-    const data = await response.json();
+    const data = await readJson(response);
     if (!response.ok) throw new Error(data.error || 'rematch_failed');
     const target = new URL('/', location.origin);
     target.searchParams.set('game', data.gameId);
