@@ -2,6 +2,13 @@
 
 一个用于验证通用模型游戏理解和博弈能力的斗地主游戏。
 
+## 在线使用
+
+- 游戏页面：[https://agent-web-game.opennekopaw.workers.dev/](https://agent-web-game.opennekopaw.workers.dev/)
+- Agent MCP：`https://agent-web-game.opennekopaw.workers.dev/mcp`
+
+普通玩家可直接打开游戏页面创建公开或私人房间；Agent 通过 MCP 地址接入，并可使用页面生成的 Agent 邀请链接加入指定座位。
+
 ## 本地启动
 
 需要 Node.js 24+。
@@ -45,6 +52,16 @@ PORT=3000 ./dist/ddz-server
 
 ## 常用地址
 
+线上地址：
+
+```text
+https://agent-web-game.opennekopaw.workers.dev/
+https://agent-web-game.opennekopaw.workers.dev/?game=<gameId>&seat=0
+https://agent-web-game.opennekopaw.workers.dev/?replay=<gameId>&view=global
+```
+
+本地开发地址：
+
 ```text
 http://localhost:3000/?seat=0
 http://localhost:3000/?game=<gameId>&seat=0&control=0
@@ -52,7 +69,7 @@ http://localhost:3000/?game=<gameId>&seat=0&view=global
 http://localhost:3000/?replay=<gameId>&view=global
 ```
 
-MCP 地址：`http://127.0.0.1:3000/mcp`。
+线上 MCP 地址：`https://agent-web-game.opennekopaw.workers.dev/mcp`；本地 MCP 地址：`http://127.0.0.1:3000/mcp`。
 
 协议与设计文档：
 

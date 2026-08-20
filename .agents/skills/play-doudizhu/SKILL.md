@@ -1,6 +1,6 @@
 ---
 name: play-doudizhu
-description: Play one seat in the local Agent Arena Dou Dizhu game through the bundled MCP tools. Use when the user asks an agent to create, rematch, or join a Dou Dizhu game, observe a seat, decide a bid or legal card play, or continue an agent-controlled match. Do not use for changing the game source code or merely explaining Dou Dizhu rules.
+description: Play one seat in the Agent Arena Dou Dizhu game through the bundled MCP tools. Use when the user asks an agent to create, rematch, or join a hosted or local Dou Dizhu game, observe a seat, decide a bid or legal card play, or continue an agent-controlled match. Do not use for changing the game source code or merely explaining Dou Dizhu rules.
 ---
 
 # Play Dou Dizhu
@@ -13,10 +13,16 @@ Control exactly one seat through the game service's remote MCP endpoint. The ser
 - Do all gameplay reasoning in the model. The service does not identify preferred combinations, rank candidate moves, protect hand structure, coordinate farmers, or recommend an action.
 - Treat the Agent's own local Markdown strategy as the gameplay policy. The game server MCP does not receive or display that local file. If explicitly using a server-catalog strategy, use the strategy returned by `join_game`.
 
-## Prerequisite
+## Service Addresses
 
-- Require the game service MCP endpoint at `http://127.0.0.1:3000/mcp` unless the user provides another URL.
-- If a tool reports `game_service_unavailable`, tell the user to start the application with `npm start` from its repository. Do not attempt to embed or replace the game service.
+- Hosted H5: `https://agent-web-game.opennekopaw.workers.dev/`
+- Hosted MCP: `https://agent-web-game.opennekopaw.workers.dev/mcp`
+- Local H5: `http://localhost:3000/`
+- Local MCP: `http://127.0.0.1:3000/mcp`
+
+Use the service origin from the user's game or invitation URL. When the user does not provide a URL and no game service is already configured, prefer the hosted MCP endpoint. Use the local endpoint when the user explicitly requests local play or the repository service is known to be running.
+
+If a tool reports `game_service_unavailable`, identify the unavailable endpoint. For a local endpoint, tell the user to start the application with `npm start` from its repository. Do not attempt to embed or replace the game service.
 
 ## Tool Names
 
@@ -31,7 +37,7 @@ Control exactly one seat through the game service's remote MCP endpoint. The ser
 4. For a direct join, call `join_game` once with a stable `agentId` and public `displayName`. Only pass `strategyMode=server` and `strategyId` when explicitly comparing a server-catalog strategy. For an invitation, use the `gameId` and `seatId` returned by `join_invite`.
 5. Joining claims the seat but does not make it ready. Call `start_game` once with the controlled `seatId` to mark only that seat ready.
 6. While `phase=waiting`, take no bid or play action. The third ready seat starts dealing automatically; continue observing until the phase changes.
-7. Give the user the H5 URL in the form `http://localhost:3000/?game=<gameId>&seat=<seatId>` when useful.
+7. Give the user an H5 URL using the same service origin as the active MCP endpoint. For the hosted service, use `https://agent-web-game.opennekopaw.workers.dev/?game=<gameId>&seat=<seatId>`; for local development, use `http://localhost:3000/?game=<gameId>&seat=<seatId>`.
 
 ## Take a Turn
 
