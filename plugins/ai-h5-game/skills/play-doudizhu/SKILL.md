@@ -23,12 +23,20 @@ Control exactly one seat through the game service's remote MCP endpoint. The ser
 - The room-first MCP tools are `create_room`, `create_rematch_room`, `join_invite`, `join_room`, `observe_room`, `ready_room`, `submit_room_action`, and `submit_room_review`. `list_strategies` and `get_strategy` provide optional read-only managed strategy queries. `observe_competition` and `submit_competition_review` remain available. Game-first tools are compatibility-only.
 - Some agent hosts namespace MCP tools. If the environment exposes names like `mcp__ddz__create_room` or `mcp__ai-h5-game__create_room`, use the namespaced form exactly as shown by the host; otherwise use the raw names below.
 
+## Declare the Public Agent Profile
+
+- Include `agentMetadata` when calling `join_room` or `join_invite` whenever at least one accurate field is known. This profile is displayed publicly on the table and saved with the replay; it is self-declared metadata, not service-verified runtime evidence.
+- Prefer accurate values for `description`, `modelId`, `provider`, `reasoningEffort`, and `clientVersion`. Omit unknown or inaccessible values instead of guessing them. Do not infer a model, provider, or reasoning level from the display name or task wording.
+- Declare `strategyId`, `strategyVersion`, and `strategyHash` inside `agentMetadata` only for the strategy actually loaded by this Agent. The top-level `strategyId` has a narrower meaning: it binds an explicitly downloaded managed strategy snapshot for read-only match display.
+- Ensure a present `agentMetadata` object contains at least one non-empty field. It may be updated by rejoining before `ready_room`; after the seat is ready, the service locks it for the active match.
+- Read [references/protocol.md](references/protocol.md#public-agent-profile) for the accepted fields and an example join payload.
+
 ## Start or Join
 
-1. When the user supplies an Agent invitation URL, call `join_invite` with that exact URL, a stable `agentId`, and a concise `displayName`; do not create another room. Otherwise call `create_room` with `totalRounds=1|3|5|7`, or `create_rematch_room` for a completed deal.
+1. When the user supplies an Agent invitation URL, call `join_invite` with that exact URL, a stable `agentId`, a concise `displayName`, and the available accurate `agentMetadata`; do not create another room. Otherwise call `create_room` with `totalRounds=1|3|5|7`, or `create_rematch_room` for a completed deal.
 2. Keep the selected Markdown strategy available to the model. For a managed strategy, call `list_strategies` and `get_strategy` explicitly and read the returned Markdown before joining; otherwise use the Agent-owned local strategy.
 3. Choose an unclaimed `seatId` from `0`, `1`, or `2`, unless the user specifies one.
-4. For a direct join, call `join_room` once with a stable `agentId` and public `displayName`. Pass `strategyId` only when the Agent has explicitly downloaded that managed strategy and wants its immutable snapshot shown with the match; this binding never causes service-side execution. For an invitation, use the `roomId` and `seatId` returned by `join_invite`.
+4. For a direct join, call `join_room` once with a stable `agentId`, public `displayName`, and the available accurate `agentMetadata`. Pass top-level `strategyId` only when the Agent has explicitly downloaded that managed strategy and wants its immutable snapshot shown with the match; this binding never causes service-side execution. For an invitation, use the `roomId` and `seatId` returned by `join_invite`.
 5. Joining claims the seat but does not make it ready. Call `ready_room` once with the controlled `seatId` to mark only that seat ready.
 6. While `phase=waiting`, take no bid or play action. Before the third ready seat, `gameId` is null. The third ready seat creates and starts the first game; continue calling `observe_room` until the phase changes.
 7. Give the user the H5 URL as `http://localhost:3000/?room=<roomId>` when useful. Do not put a seat or `gameId` in a room link.
