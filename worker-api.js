@@ -2,14 +2,15 @@ import {
   assertMatchRoomOwner, assertRoomOwnerById, createCompetition, createMatch, createMatchInvite, createRematch, createRematchRoom, createRoom, createRoomInvite, exportStoreState,
   getAuthorizedReplay, getMatch, getMatchStrategies, getRoom, getRoomStrategies, getStrategies, importStoreState,
   joinAgentInvite, joinAvailablePlayerMatch, joinAvailableRoomPlayer, joinMatch, joinPlayerInvite, joinPlayerMatch, joinRoomAgent, observeCompetition,
-  listAccessibleReplays, observeMatch, observeRoom, readyRoom, reconnectPlayerMatch, reconnectRoomPlayer, removeDisconnectedPlayer, removeDisconnectedRoomPlayer,
+  listAccessibleReplays, observeMatch, observeRoom, readyRoom, removeDisconnectedPlayer, removeDisconnectedRoomPlayer,
   resolveMatchInvite, startMatch, submitCompetitionReview, submitMatchAction, submitMatchReview, submitRoomAction
 } from './game/store.js';
 import { getStrategy } from './game/strategy-runtime.js';
+import { browserPlayerResult, browserSessionCookie, browserSessionToken } from './server/browser-session.js';
 import { handleMcpMessage } from './server/mcp.js';
 
-const json = (body, status = 200) => new Response(JSON.stringify(body), {
-  status, headers: { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': '*' }
+const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), {
+  status, headers: { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': '*', ...headers }
 });
 
 async function body(request) {
@@ -18,10 +19,14 @@ async function body(request) {
 }
 
 const replayAccess = (request) => String(request.headers.get('x-replay-access-token') || '').trim();
-const seatSession = (request) => String(request.headers.get('x-seat-session-token') || '').trim();
-const seatSessionSeat = (request) => request.headers.get('x-seat-session-seat');
+const seatSession = (request) => browserSessionToken(request.headers.get('cookie'));
 const roomOwner = (request) => String(request.headers.get('x-room-owner-token') || '').trim();
 const gameInvite = (request) => String(request.headers.get('x-game-invite-token') || '').trim();
+const playerJson = (result, request) => {
+  const player = browserPlayerResult(result);
+  const secure = new URL(request.url).protocol === 'https:';
+  return json(player.body, 200, player.token ? { 'set-cookie': browserSessionCookie(player.token, secure) } : {});
+};
 
 export async function handleWorkerRequest(request) {
   const url = new URL(request.url);
@@ -48,8 +53,6 @@ export async function handleWorkerRequest(request) {
       } catch (error) { return json({ protocol:'agent-game.v1', ok:false, error:error.message }, error.message === 'room_not_found' ? 404 : 400); }
     }
 
-    const roomReconnect = url.pathname.match(/^\/api\/rooms\/([^/]+)\/reconnect$/);
-    if (request.method === 'POST' && roomReconnect) { const data = await body(request); try { return json(reconnectRoomPlayer(roomReconnect[1], data.reconnectCode)); } catch (error) { return json({ok:false,error:error.message}, error.message === 'room_not_found' ? 404 : 400); } }
     const roomPlayer = url.pathname.match(/^\/api\/rooms\/([^/]+)\/players\/([0-2])$/);
     if (request.method === 'DELETE' && roomPlayer) { try { return json(removeDisconnectedRoomPlayer(roomPlayer[1], Number(roomPlayer[2]), roomOwner(request))); } catch (error) { return json({ok:false,error:error.message}, error.message === 'room_owner_required' ? 403 : error.message === 'room_not_found' ? 404 : 400); } }
     const browserRoom = url.pathname.match(/^\/api\/rooms\/([^/]+)(?:\/(state|strategies|join|ready|actions|invites))?$/);
@@ -57,9 +60,9 @@ export async function handleWorkerRequest(request) {
       const room = getRoom(browserRoom[1]);
       if (!room) return json({ error:'room_not_found' }, 404);
       try {
-        if (request.method === 'GET' && browserRoom[2] === 'state') return json(observeRoom(browserRoom[1], Number(url.searchParams.get('seat')), { requireAuthorization:true, revealAll:url.searchParams.get('view') === 'global', seatSessionToken:seatSession(request), controlSeatId:seatSessionSeat(request), roomOwnerToken:roomOwner(request), inviteToken:gameInvite(request) }));
+        if (request.method === 'GET' && browserRoom[2] === 'state') return json(observeRoom(browserRoom[1], Number(url.searchParams.get('seat')), { requireAuthorization:true, revealAll:url.searchParams.get('view') === 'global', seatSessionToken:seatSession(request), roomOwnerToken:roomOwner(request), inviteToken:gameInvite(request) }));
         if (request.method === 'GET' && browserRoom[2] === 'strategies') { if (url.searchParams.get('view') !== 'global') return json({error:'global_view_required'}, 403); assertRoomOwnerById(browserRoom[1], roomOwner(request)); return json(getRoomStrategies(browserRoom[1])); }
-        if (request.method === 'POST' && browserRoom[2] === 'join') { const data = await body(request); return json(joinAvailableRoomPlayer(browserRoom[1], String(data.playerId || 'h5-player-auto'), data.displayName, { seatSessionToken:seatSession(request) })); }
+        if (request.method === 'POST' && browserRoom[2] === 'join') { const data = await body(request); return playerJson(joinAvailableRoomPlayer(browserRoom[1], String(data.playerId || 'h5-player-auto'), data.displayName, { seatSessionToken:seatSession(request) }), request); }
         if (request.method === 'POST' && browserRoom[2] === 'ready') { const data = await body(request); return json(readyRoom(browserRoom[1], Number(data.seatId), { seatSessionToken:seatSession(request) })); }
         if (request.method === 'POST' && browserRoom[2] === 'actions') { const data = await body(request); const state = submitRoomAction(browserRoom[1], data.gameId, Number(data.seatId), data.action, data.seq, { source:'player', seatSessionToken:seatSession(request) }); return json({ok:true, gameId:state.gameId, seq:state.seq}); }
         if (request.method === 'POST' && browserRoom[2] === 'invites') { const data = await body(request); return json(createRoomInvite(browserRoom[1], data.inviteType, data.seatId, roomOwner(request)), 201); }
@@ -71,7 +74,7 @@ export async function handleWorkerRequest(request) {
     if (browserInvite) {
       try {
         if (request.method === 'GET' && !browserInvite[2]) return json(resolveMatchInvite(browserInvite[1]));
-        if (request.method === 'POST' && browserInvite[2] === 'join') { const data = await body(request); return json(joinPlayerInvite(browserInvite[1], data.playerId, data.displayName, seatSession(request))); }
+        if (request.method === 'POST' && browserInvite[2] === 'join') { const data = await body(request); return playerJson(joinPlayerInvite(browserInvite[1], data.playerId, data.displayName, seatSession(request)), request); }
       } catch (error) { return json({ protocol: 'agent-game.v1', ok: false, error: error.message }, error.message === 'invite_not_found' ? 404 : 400); }
     }
     const agentInvite = url.pathname.match(/^\/agent\/v1\/invites\/([^/]+)(?:\/(join))?$/);
@@ -118,17 +121,15 @@ export async function handleWorkerRequest(request) {
       } catch (error) { return json({ protocol: 'agent-game.v1', ok: false, error: error.message }, 400); }
     }
 
-    const reconnect = url.pathname.match(/^\/api\/games\/([^/]+)\/reconnect$/);
-    if (request.method === 'POST' && reconnect) { const data = await body(request); try { return json(reconnectPlayerMatch(reconnect[1], data.reconnectCode)); } catch (error) { return json({ ok: false, error: error.message }, 400); } }
     const removePlayer = url.pathname.match(/^\/api\/games\/([^/]+)\/players\/([0-2])$/);
     if (request.method === 'DELETE' && removePlayer) { try { return json(removeDisconnectedPlayer(removePlayer[1], Number(removePlayer[2]), roomOwner(request))); } catch (error) { return json({ ok: false, error: error.message }, error.message === 'room_owner_required' ? 403 : 400); } }
     const match = url.pathname.match(/^\/api\/games\/([^/]+)(?:\/(state|strategies|join|start|actions|invites))?$/);
     if (!match) return json({ error: 'not_found' }, 404);
     const game = getMatch(match[1]);
     if (!game) return json({ error: 'game_not_found' }, 404);
-    if (request.method === 'GET' && match[2] === 'state') { try { return json(observeMatch(match[1], Number(url.searchParams.get('seat')), { requireAuthorization:true, revealAll:url.searchParams.get('view') === 'global', seatSessionToken:seatSession(request), controlSeatId:seatSessionSeat(request), roomOwnerToken:roomOwner(request), inviteToken:gameInvite(request) })); } catch (error) { return json({ error: error.message }, ['room_owner_required', 'access_denied'].includes(error.message) ? 403 : 400); } }
+    if (request.method === 'GET' && match[2] === 'state') { try { return json(observeMatch(match[1], Number(url.searchParams.get('seat')), { requireAuthorization:true, revealAll:url.searchParams.get('view') === 'global', seatSessionToken:seatSession(request), roomOwnerToken:roomOwner(request), inviteToken:gameInvite(request) })); } catch (error) { return json({ error: error.message }, ['room_owner_required', 'access_denied'].includes(error.message) ? 403 : 400); } }
     if (request.method === 'GET' && match[2] === 'strategies') { if (url.searchParams.get('view') !== 'global') return json({ error: 'global_view_required' }, 403); try { assertMatchRoomOwner(match[1], roomOwner(request)); return json(getMatchStrategies(match[1])); } catch (error) { return json({ error:error.message }, 403); } }
-    if (request.method === 'POST' && match[2] === 'join') { const data = await body(request); try { const automatic = data.seatId === undefined || data.seatId === null || data.seatId === 'auto'; const options = { seatSessionToken:seatSession(request) }; return json(automatic ? joinAvailablePlayerMatch(match[1], String(data.playerId || 'h5-player-auto'), data.displayName, options) : joinPlayerMatch(match[1], Number(data.seatId), String(data.playerId || `h5-player-${data.seatId}`), data.displayName, options)); } catch (error) { return json({ ok: false, error: error.message }, 400); } }
+    if (request.method === 'POST' && match[2] === 'join') { const data = await body(request); try { const automatic = data.seatId === undefined || data.seatId === null || data.seatId === 'auto'; const options = { seatSessionToken:seatSession(request) }; const result = automatic ? joinAvailablePlayerMatch(match[1], String(data.playerId || 'h5-player-auto'), data.displayName, options) : joinPlayerMatch(match[1], Number(data.seatId), String(data.playerId || `h5-player-${data.seatId}`), data.displayName, options); return playerJson(result, request); } catch (error) { return json({ ok: false, error: error.message }, 400); } }
     if (request.method === 'POST' && match[2] === 'start') { const data = await body(request); try { return json(startMatch(match[1], Number(data.seatId), { seatSessionToken:seatSession(request) })); } catch (error) { return json({ ok: false, error: error.message }, 400); } }
     if (request.method === 'POST' && match[2] === 'actions') { const data = await body(request); try { const state = submitMatchAction(match[1], Number(data.seatId), data.action, data.seq, { source: 'player', seatSessionToken:seatSession(request) }); return json({ ok: true, seq: state.seq }); } catch (error) { return json({ ok: false, error: error.message }, 400); } }
     if (request.method === 'POST' && match[2] === 'invites') { const data = await body(request); try { return json(createMatchInvite(match[1], data.inviteType, data.seatId, roomOwner(request)), 201); } catch (error) { return json({ ok: false, error: error.message }, error.message === 'room_owner_required' ? 403 : 400); } }

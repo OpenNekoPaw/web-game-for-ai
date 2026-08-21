@@ -244,8 +244,9 @@ export function observeRoom(roomId, seatId = 0, options = {}) {
   maintainRoomPresence(room);
   const requestedSeat = Number(seatId);
   validateSeat(requestedSeat);
-  const controlSeat = options.controlSeatId === undefined ? requestedSeat : Number(options.controlSeatId);
-  const controlAuthorized = touchAuthorizedRoomPlayer(room, controlSeat, options.seatSessionToken);
+  const requestedControlSeat = options.controlSeatId === undefined ? requestedSeat : Number(options.controlSeatId);
+  const controlSeat = authorizedPlayerSeat(room, requestedControlSeat, options.seatSessionToken);
+  const controlAuthorized = controlSeat !== null && touchAuthorizedRoomPlayer(room, controlSeat, options.seatSessionToken);
   const ownerAuthorized = roomOwnerTokenMatches(room.roomOwnerToken, options.roomOwnerToken);
   const inviteAuthorized = spectatorInviteMatchesRoom(roomId, options.inviteToken);
   if (options.requireAuthorization === true && room.accessMode !== 'open' && !controlAuthorized && !ownerAuthorized && !inviteAuthorized) {
@@ -331,15 +332,17 @@ export function joinRoomPlayer(roomId, seatId, playerId, displayName, options = 
   const room = requireRoom(roomId);
   validateSeat(seatId);
   const occupant = room.players.get(seatId);
+  const browserSeat = authorizedPlayerSeat(room, null, options.seatSessionToken);
   assertRoomWaitingOrExisting(room, occupant === playerId);
   if (room.agents.has(seatId)) throw new Error('seat_occupied');
   if (occupant && occupant !== playerId) throw new Error('seat_occupied');
+  if (!occupant && browserSeat !== null && browserSeat !== seatId) throw new Error('browser_session_already_seated');
   if (!occupant) assertSeatAdmission(room, 'player', playerId, options.viaInvite === true);
   const existingSession = room.playerSessions.get(seatId);
   if (occupant && existingSession && !existingSession.legacy && !options.viaInvite) assertSeatSession(room, seatId, options.seatSessionToken);
   room.players.set(seatId, playerId);
   room.displayNames.set(seatId, room.displayNames.has(seatId) && displayName === undefined ? room.displayNames.get(seatId) : normalizeDisplayName(displayName, `玩家 ${['A', 'B', 'C'][seatId]}`));
-  const session = ensurePlayerSession(room, seatId);
+  const session = ensurePlayerSession(room, seatId, options.seatSessionToken);
   session.lastSeenAt = Date.now();
   session.managed = false;
   room.updatedAt = session.lastSeenAt;
@@ -350,6 +353,8 @@ export function joinRoomPlayer(roomId, seatId, playerId, displayName, options = 
 export function joinAvailableRoomPlayer(roomId, playerId, displayName, options = {}) {
   const room = requireRoom(roomId);
   const identity = normalizeInviteIdentity(playerId, 'h5-player-auto');
+  const sessionSeat = authorizedPlayerSeat(room, null, options.seatSessionToken);
+  if (sessionSeat !== null) return joinRoomPlayer(roomId, sessionSeat, room.players.get(sessionSeat), undefined, options);
   const existingSeat = [...room.players.entries()].find(([, occupant]) => occupant === identity)?.[0];
   if (existingSeat !== undefined) return joinRoomPlayer(roomId, existingSeat, identity, displayName, options);
   const targetSeat = [0, 1, 2].find((seatId) => !occupiedSeats(room).includes(seatId));
@@ -379,23 +384,6 @@ export function submitRoomAction(roomId, gameId, seatId, action, expectedSeq, op
   if (!room.currentGameId) throw new Error('game_not_started');
   if (gameId && gameId !== room.currentGameId) throw new Error('stale_game');
   return submitMatchAction(room.currentGameId, seatId, action, expectedSeq, options);
-}
-
-export function reconnectRoomPlayer(roomId, reconnectCode) {
-  const room = requireRoom(roomId);
-  const target = room.currentGameId ? requireMatch(room.currentGameId) : room;
-  maintainPlayerPresence(target);
-  const normalizedCode = normalizeReconnectCode(reconnectCode);
-  const entry = [...target.playerSessions.entries()].find(([, session]) => session.reconnectCode === normalizedCode);
-  if (!entry) throw new Error('invalid_reconnect_code');
-  const [seatId, session] = entry;
-  session.token = createAccessToken();
-  session.reconnectCode = createReconnectCode(target);
-  session.lastSeenAt = Date.now();
-  session.managed = false;
-  room.playerSessions = target.playerSessions;
-  markMetadataAuthoritative();
-  return withPlayerSession(target, seatId, withRoomAccess(room, observeRoom(roomId, seatId, { seatSessionToken: session.token, controlSeatId: seatId })));
 }
 
 export function removeDisconnectedRoomPlayer(roomId, seatId, roomOwnerToken, now = Date.now()) {
@@ -692,7 +680,9 @@ export function joinPlayerMatch(gameId, seatId, playerId, displayName, options =
   validateSeat(seatId);
   if (game.agents.has(seatId)) throw new Error('seat_occupied');
   const occupant = game.players.get(seatId);
+  const browserSeat = authorizedPlayerSeat(game, null, options.seatSessionToken);
   if (occupant && occupant !== playerId) throw new Error('seat_occupied');
+  if (!occupant && browserSeat !== null && browserSeat !== seatId) throw new Error('browser_session_already_seated');
   // Rejoining an already claimed seat is idempotent. This lets the same browser
   // recover after a refresh without requiring the original short-lived invite.
   if (!occupant) assertSeatAdmission(game, 'player', playerId, options.viaInvite === true);
@@ -706,7 +696,7 @@ export function joinPlayerMatch(gameId, seatId, playerId, displayName, options =
     : normalizeDisplayName(displayName, `玩家 ${['A', 'B', 'C'][seatId]}`);
   game.players.set(seatId, playerId);
   game.displayNames.set(seatId, resolvedDisplayName);
-  const session = ensurePlayerSession(game, seatId);
+  const session = ensurePlayerSession(game, seatId, options.seatSessionToken);
   session.lastSeenAt = Date.now();
   session.managed = false;
   game.updatedAt = session.lastSeenAt;
@@ -719,27 +709,13 @@ export function joinPlayerMatch(gameId, seatId, playerId, displayName, options =
 export function joinAvailablePlayerMatch(gameId, playerId, displayName, options = {}) {
   const game = requireMatch(gameId);
   const identity = normalizeInviteIdentity(playerId, 'h5-player-auto');
+  const sessionSeat = authorizedPlayerSeat(game, null, options.seatSessionToken);
+  if (sessionSeat !== null) return joinPlayerMatch(gameId, sessionSeat, game.players.get(sessionSeat), undefined, options);
   const existingSeat = [...game.players.entries()].find(([, occupant]) => occupant === identity)?.[0];
   if (existingSeat !== undefined) return joinPlayerMatch(gameId, existingSeat, identity, displayName, options);
   const targetSeat = [0, 1, 2].find((seatId) => !occupiedSeats(game).includes(seatId));
   if (targetSeat === undefined) throw new Error('room_full');
   return joinPlayerMatch(gameId, targetSeat, identity, displayName, options);
-}
-
-export function reconnectPlayerMatch(gameId, reconnectCode) {
-  const game = requireMatch(gameId);
-  maintainPlayerPresence(game);
-  const normalizedCode = normalizeReconnectCode(reconnectCode);
-  const entry = [...game.playerSessions.entries()].find(([, session]) => session.reconnectCode === normalizedCode);
-  if (!entry) throw new Error('invalid_reconnect_code');
-  const [seatId, session] = entry;
-  if (!game.players.has(seatId)) throw new Error('seat_not_joined');
-  session.token = createAccessToken();
-  session.reconnectCode = createReconnectCode(game);
-  session.lastSeenAt = Date.now();
-  session.managed = false;
-  recordFrame(game, { type: 'player_reconnected', seatId }, session.lastSeenAt);
-  return withPlayerSession(game, seatId, withReplayAccess(game, observeMatch(gameId, seatId, { seatSessionToken: session.token })));
 }
 
 export function removeDisconnectedPlayer(gameId, seatId, roomOwnerToken, now = Date.now()) {
@@ -780,8 +756,9 @@ export function observeMatch(gameId, seatId, options = {}) {
   const authorizationRequired = options.requireAuthorization === true;
   const requestedSeat = Number(seatId);
   validateSeat(requestedSeat);
-  const controlSeat = options.controlSeatId === undefined ? seatId : Number(options.controlSeatId);
-  const controlAuthorized = touchAuthorizedPlayer(game, controlSeat, options.seatSessionToken);
+  const requestedControlSeat = options.controlSeatId === undefined ? seatId : Number(options.controlSeatId);
+  const controlSeat = authorizedPlayerSeat(game, requestedControlSeat, options.seatSessionToken);
+  const controlAuthorized = controlSeat !== null && touchAuthorizedPlayer(game, controlSeat, options.seatSessionToken);
   const ownerAuthorized = roomOwnerTokenMatches(game.roomOwnerToken, options.roomOwnerToken);
   const inviteAuthorized = spectatorInviteMatches(gameId, options.inviteToken);
   if (authorizationRequired && game.accessMode !== 'open' && !controlAuthorized && !ownerAuthorized && !inviteAuthorized) {
@@ -1108,40 +1085,24 @@ function seatPresence(game, now = Date.now()) {
   }));
 }
 
-function ensurePlayerSession(game, seatId) {
+function ensurePlayerSession(game, seatId, preferredToken) {
   let session = game.playerSessions.get(seatId);
   if (!session || session.legacy || !normalizeAccessToken(session.token)) {
-    session = { token: createAccessToken(), reconnectCode: createReconnectCode(game), lastSeenAt: Date.now(), managed: false };
+    session = { token: normalizeAccessToken(preferredToken) || createAccessToken(), lastSeenAt: Date.now(), managed: false };
     game.playerSessions.set(seatId, session);
   }
+  delete session.reconnectCode;
   session.managed = session.managed === true;
   return session;
 }
 
 function withPlayerSession(game, seatId, result) {
   const session = ensurePlayerSession(game, seatId);
-  return { ...result, seatSessionToken: session.token, reconnectCode: session.reconnectCode };
+  return { ...result, seatSessionToken: session.token };
 }
 
 function normalizeAccessToken(value) {
   return typeof value === 'string' && /^[A-Za-z0-9_-]{32,128}$/.test(value) ? value : null;
-}
-
-function normalizeReconnectCode(value) {
-  const code = String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-  if (!/^[A-Z0-9]{8}$/.test(code)) throw new Error('invalid_reconnect_code');
-  return code;
-}
-
-function createReconnectCode(game) {
-  const alphabet = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
-  let code;
-  do {
-    const bytes = new Uint8Array(8);
-    crypto.getRandomValues(bytes);
-    code = [...bytes].map((value) => alphabet[value % alphabet.length]).join('');
-  } while ([...game.playerSessions.values()].some((session) => session.reconnectCode === code));
-  return code;
 }
 
 function assertSeatSession(game, seatId, token) {
@@ -1167,6 +1128,14 @@ function touchAuthorizedPlayer(game, seatId, token) {
   session.lastSeenAt = now;
   setPlayerManaged(game, normalizedSeat, false, now);
   return true;
+}
+
+function authorizedPlayerSeat(game, preferredSeat, token) {
+  const normalizedToken = normalizeAccessToken(token);
+  if (!normalizedToken) return null;
+  const normalizedSeat = Number(preferredSeat);
+  if ([0, 1, 2].includes(normalizedSeat) && game.players.has(normalizedSeat) && game.playerSessions.get(normalizedSeat)?.token === normalizedToken) return normalizedSeat;
+  return [...game.playerSessions.entries()].find(([seatId, session]) => game.players.has(seatId) && session.token === normalizedToken)?.[0] ?? null;
 }
 
 function isPlayerOffline(game, seatId, now = Date.now()) {
@@ -1608,8 +1577,11 @@ function hydrateGame(game) {
   game.playerSessions = game.playerSessions instanceof Map ? game.playerSessions : new Map();
   game.updatedAt = Number(game.updatedAt) || Number(game.gameId?.slice(4)) || Date.now();
   for (const seatId of game.players?.keys?.() || []) {
-    if (!game.playerSessions.has(seatId)) game.playerSessions.set(seatId, { token: null, reconnectCode: null, lastSeenAt: Date.now(), managed: false, legacy: true });
-    else game.playerSessions.get(seatId).managed = game.playerSessions.get(seatId).managed === true;
+    if (!game.playerSessions.has(seatId)) game.playerSessions.set(seatId, { token: null, lastSeenAt: Date.now(), managed: false, legacy: true });
+    else {
+      delete game.playerSessions.get(seatId).reconnectCode;
+      game.playerSessions.get(seatId).managed = game.playerSessions.get(seatId).managed === true;
+    }
   }
   return game;
 }

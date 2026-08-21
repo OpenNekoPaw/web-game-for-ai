@@ -40,7 +40,7 @@ test('browser seat query is only a public perspective without a seat token', asy
   assert.deepEqual(body.hands.map((hand) => hand.cards.length), [0, 0, 0]);
 });
 
-test('browser seat token determines the private seat instead of the URL query', async () => {
+test('browser session cookie determines the private seat instead of the URL query', async () => {
   importStoreState({});
   const game = createMatch();
   const player = joinPlayerMatch(game.gameId, 0, 'player-a');
@@ -49,8 +49,7 @@ test('browser seat token determines the private seat instead of the URL query', 
   const { response, body } = await readState(game.gameId, {
     seat: 2,
     headers: {
-      'x-seat-session-token': player.seatSessionToken,
-      'x-seat-session-seat': '0'
+      cookie: `ddz_browser_session=${player.seatSessionToken}`
     }
   });
   assert.equal(response.status, 200);
@@ -59,6 +58,26 @@ test('browser seat token determines the private seat instead of the URL query', 
   assert.equal(body.controlAuthorized, true);
   assert.equal(body.hands[0].cards.length > 0, true);
   assert.deepEqual(body.hands.slice(1).map((hand) => hand.cards.length), [0, 0]);
+});
+
+test('browser join stores the session only in an HttpOnly cookie', async () => {
+  importStoreState({});
+  const game = createMatch();
+  const response = await handleWorkerRequest(new Request(`https://example.test/api/games/${game.gameId}/join`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ playerId: 'cookie-player' })
+  }));
+  const body = await response.json();
+  const cookie = response.headers.get('set-cookie');
+
+  assert.equal(response.status, 200);
+  assert.equal('seatSessionToken' in body, false);
+  assert.equal('reconnectCode' in body, false);
+  assert.match(cookie, /^ddz_browser_session=[A-Za-z0-9_-]{32,128};/);
+  assert.match(cookie, /HttpOnly/);
+  assert.match(cookie, /SameSite=Lax/);
+  assert.match(cookie, /Secure/);
 });
 
 test('global browser view requires the room owner credential', async () => {

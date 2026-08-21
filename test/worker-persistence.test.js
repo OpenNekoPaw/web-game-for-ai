@@ -229,7 +229,8 @@ test('rejected actions and ordinary player heartbeats do not persist', async () 
   const joinedResponse = await object.fetch(apiRequest(`/api/games/${playerGame.gameId}/join`, {
     method: 'POST', body: { seatId: 0, playerId: 'heartbeat-player' }
   }));
-  const joined = await joinedResponse.json();
+  await joinedResponse.json();
+  const browserCookie = joinedResponse.headers.get('set-cookie').split(';')[0];
   const beforeHeartbeat = {
     snapshot: state.snapshotPutCount,
     game: state.recordPutCounts.get(`game:${playerGame.gameId}`),
@@ -237,7 +238,7 @@ test('rejected actions and ordinary player heartbeats do not persist', async () 
   };
   for (let index = 0; index < 5; index += 1) {
     const response = await object.fetch(apiRequest(`/api/games/${playerGame.gameId}/state?seat=0`, {
-      headers: { 'x-seat-session-token': joined.seatSessionToken, 'x-seat-session-seat': '0' }
+      headers: { cookie: browserCookie }
     }));
     assert.equal(response.status, 200);
   }
@@ -258,14 +259,15 @@ test('managed-mode transitions are persisted once as authoritative changes', asy
   const joinedResponse = await object.fetch(apiRequest(`/api/games/${created.gameId}/join`, {
     method: 'POST', body: { seatId: 0, playerId: 'managed-player' }
   }));
-  const joined = await joinedResponse.json();
+  await joinedResponse.json();
+  const browserCookie = joinedResponse.headers.get('set-cookie').split(';')[0];
   for (const seatId of [1, 2]) {
     await callTool(object, 301 + seatId, 'join_game', { gameId: created.gameId, seatId, agentId: `managed-agent-${seatId}` });
     await callTool(object, 304 + seatId, 'start_game', { gameId: created.gameId, seatId });
   }
   const playerStart = await object.fetch(apiRequest(`/api/games/${created.gameId}/start`, {
     method: 'POST',
-    headers: { 'x-seat-session-token': joined.seatSessionToken },
+    headers: { cookie: browserCookie },
     body: { seatId: 0 }
   }));
   assert.equal(playerStart.status, 200);
@@ -279,7 +281,7 @@ test('managed-mode transitions are persisted once as authoritative changes', asy
 
   const beforeRecovered = state.recordPutCounts.get(`game:${created.gameId}`);
   const heartbeat = await object.fetch(apiRequest(`/api/games/${created.gameId}/state?seat=0`, {
-    headers: { 'x-seat-session-token': joined.seatSessionToken, 'x-seat-session-seat': '0' }
+    headers: { cookie: browserCookie }
   }));
   assert.equal(heartbeat.status, 200);
   assert.equal(game.playerSessions.get(0).managed, false);

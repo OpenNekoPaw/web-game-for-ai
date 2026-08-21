@@ -6,40 +6,48 @@ import {
   joinAvailablePlayerMatch,
   joinPlayerMatch,
   observeMatch,
-  reconnectPlayerMatch,
   removeDisconnectedPlayer,
   startMatch,
   submitMatchAction,
   tickMatches
 } from '../game/store.js';
 
-test('seat session token prevents another client from impersonating the same player id', () => {
+test('browser session token prevents another client from impersonating the same player id', () => {
   const game = createMatch();
   const joined = joinAvailablePlayerMatch(game.gameId, 'public-player');
 
   assert.match(joined.seatSessionToken, /^[A-Za-z0-9_-]{32,128}$/);
-  assert.match(joined.reconnectCode, /^[A-Z0-9]{8}$/);
+  assert.equal('reconnectCode' in joined, false);
   assert.throws(() => joinAvailablePlayerMatch(game.gameId, 'public-player'), /seat_session_required/);
   assert.equal(joinAvailablePlayerMatch(game.gameId, 'public-player', undefined, { seatSessionToken: joined.seatSessionToken }).you, joined.you);
   assert.throws(() => startMatch(game.gameId, joined.you), /seat_session_required/);
   assert.equal(startMatch(game.gameId, joined.you, { seatSessionToken: joined.seatSessionToken }).readySeats.includes(joined.you), true);
 });
 
-test('reconnect code rotates the seat token and restores control on another device', () => {
+test('the same browser session restores its seat without trusting a new player id', () => {
   const game = createMatch();
   const joined = joinPlayerMatch(game.gameId, 1, 'player-b');
-  const reconnected = reconnectPlayerMatch(game.gameId, joined.reconnectCode);
+  const restored = joinAvailablePlayerMatch(game.gameId, 'different-public-id', undefined, { seatSessionToken: joined.seatSessionToken });
 
-  assert.equal(reconnected.you, 1);
-  assert.notEqual(reconnected.seatSessionToken, joined.seatSessionToken);
-  assert.notEqual(reconnected.reconnectCode, joined.reconnectCode);
-  assert.throws(() => joinPlayerMatch(game.gameId, 1, 'player-b', undefined, { seatSessionToken: joined.seatSessionToken }), /seat_session_required/);
-  assert.equal(joinPlayerMatch(game.gameId, 1, 'player-b', undefined, { seatSessionToken: reconnected.seatSessionToken }).controlAuthorized, true);
+  assert.equal(restored.you, 1);
+  assert.equal(restored.seatControllers[1].id, 'player-b');
+  assert.equal(restored.seatSessionToken, joined.seatSessionToken);
+  assert.equal(observeMatch(game.gameId, 2, { requireAuthorization: true, seatSessionToken: joined.seatSessionToken }).controlledSeat, 1);
+});
+
+test('one browser session cannot claim two seats in the same game', () => {
+  const game = createMatch();
+  const joined = joinPlayerMatch(game.gameId, 0, 'player-a');
+
+  assert.throws(() => joinPlayerMatch(game.gameId, 1, 'player-b', undefined, {
+    viaInvite: true,
+    seatSessionToken: joined.seatSessionToken
+  }), /browser_session_already_seated/);
 });
 
 test('waiting player is released after 60 seconds offline', () => {
   const game = createMatch();
-  const joined = joinPlayerMatch(game.gameId, 0, 'waiting-player');
+  joinPlayerMatch(game.gameId, 0, 'waiting-player');
   const lastSeenAt = game.playerSessions.get(0).lastSeenAt;
 
   tickMatches(lastSeenAt + 59_999);
@@ -47,7 +55,6 @@ test('waiting player is released after 60 seconds offline', () => {
   tickMatches(lastSeenAt + 60_000);
   assert.equal(game.players.has(0), false);
   assert.equal(game.playerSessions.has(0), false);
-  assert.throws(() => reconnectPlayerMatch(game.gameId, joined.reconnectCode), /invalid_reconnect_code/);
 });
 
 test('room owner can remove an offline waiting player but not an online one', () => {

@@ -2,18 +2,22 @@ import http from 'node:http';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
-import { assertMatchRoomOwner, assertRoomOwnerById, createCompetition, createMatch, createMatchInvite, createRematch, createRematchRoom, createRoom, createRoomInvite, getAuthorizedReplay, getMatch, getMatchStrategies, getRoom, getRoomStrategies, getStrategies, joinAgentInvite, joinAvailablePlayerMatch, joinAvailableRoomPlayer, joinMatch, joinPlayerInvite, joinPlayerMatch, joinRoomAgent, listAccessibleReplays, observeCompetition, observeMatch, observeRoom, readyRoom, reconnectPlayerMatch, reconnectRoomPlayer, removeDisconnectedPlayer, removeDisconnectedRoomPlayer, resolveMatchInvite, startMatch, submitCompetitionReview, submitMatchAction, submitMatchReview, submitRoomAction, tickMatches } from './game/store.js';
+import { assertMatchRoomOwner, assertRoomOwnerById, createCompetition, createMatch, createMatchInvite, createRematch, createRematchRoom, createRoom, createRoomInvite, getAuthorizedReplay, getMatch, getMatchStrategies, getRoom, getRoomStrategies, getStrategies, joinAgentInvite, joinAvailablePlayerMatch, joinAvailableRoomPlayer, joinMatch, joinPlayerInvite, joinPlayerMatch, joinRoomAgent, listAccessibleReplays, observeCompetition, observeMatch, observeRoom, readyRoom, removeDisconnectedPlayer, removeDisconnectedRoomPlayer, resolveMatchInvite, startMatch, submitCompetitionReview, submitMatchAction, submitMatchReview, submitRoomAction, tickMatches } from './game/store.js';
 import { assetsDirectory } from './game/runtime-paths.js';
+import { browserPlayerResult, browserSessionCookie, browserSessionToken } from './server/browser-session.js';
 import { handleMcpMessage } from './server/mcp.js';
 
 const mime = { '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.css':'text/css; charset=utf-8' };
-const json = (res, code, body) => { res.writeHead(code, {'content-type':'application/json; charset=utf-8','access-control-allow-origin':'*'}); res.end(JSON.stringify(body)); };
+const json = (res, code, body, headers = {}) => { res.writeHead(code, {'content-type':'application/json; charset=utf-8','access-control-allow-origin':'*',...headers}); res.end(JSON.stringify(body)); };
 const body = async (req) => { let data=''; for await (const chunk of req) data += chunk; return data ? JSON.parse(data) : {}; };
 const replayAccess = (req) => String(req.headers['x-replay-access-token'] || '').trim();
-const seatSession = (req) => String(req.headers['x-seat-session-token'] || '').trim();
-const seatSessionSeat = (req) => req.headers['x-seat-session-seat'];
+const seatSession = (req) => browserSessionToken(req.headers.cookie);
 const roomOwner = (req) => String(req.headers['x-room-owner-token'] || '').trim();
 const gameInvite = (req) => String(req.headers['x-game-invite-token'] || '').trim();
+const playerJson = (req, res, result) => {
+  const player = browserPlayerResult(result);
+  return json(res, 200, player.body, player.token ? {'set-cookie':browserSessionCookie(player.token, false)} : {});
+};
 const mcp = async (req, res) => {
   if (req.method !== 'POST') return json(res, 405, { error: 'method_not_allowed' });
   let message;
@@ -57,17 +61,15 @@ const handleRequest = async (req, res) => {
         if (agentRoom[2] === 'review' && req.method === 'POST') return json(res, 200, submitMatchReview(getRoom(agentRoom[1])?.currentGameId, seatId, data.review));
       } catch (error) { return json(res, error.message === 'room_not_found' ? 404 : 400, {protocol:'agent-game.v1',ok:false,error:error.message}); }
     }
-    const roomReconnect = url.pathname.match(/^\/api\/rooms\/([^/]+)\/reconnect$/);
-    if (req.method === 'POST' && roomReconnect) { const data = await body(req); try { return json(res, 200, reconnectRoomPlayer(roomReconnect[1], data.reconnectCode)); } catch (error) { return json(res, error.message === 'room_not_found' ? 404 : 400, {ok:false,error:error.message}); } }
     const roomPlayer = url.pathname.match(/^\/api\/rooms\/([^/]+)\/players\/([0-2])$/);
     if (req.method === 'DELETE' && roomPlayer) { try { return json(res, 200, removeDisconnectedRoomPlayer(roomPlayer[1], Number(roomPlayer[2]), roomOwner(req))); } catch (error) { return json(res, error.message === 'room_owner_required' ? 403 : error.message === 'room_not_found' ? 404 : 400, {ok:false,error:error.message}); } }
     const browserRoom = url.pathname.match(/^\/api\/rooms\/([^/]+)(?:\/(state|strategies|join|ready|actions|invites))?$/);
     if (browserRoom) {
       if (!getRoom(browserRoom[1])) return json(res, 404, {error:'room_not_found'});
       try {
-        if (req.method === 'GET' && browserRoom[2] === 'state') return json(res, 200, observeRoom(browserRoom[1], Number(url.searchParams.get('seat')), {requireAuthorization:true,revealAll:url.searchParams.get('view') === 'global',seatSessionToken:seatSession(req),controlSeatId:seatSessionSeat(req),roomOwnerToken:roomOwner(req),inviteToken:gameInvite(req)}));
+        if (req.method === 'GET' && browserRoom[2] === 'state') return json(res, 200, observeRoom(browserRoom[1], Number(url.searchParams.get('seat')), {requireAuthorization:true,revealAll:url.searchParams.get('view') === 'global',seatSessionToken:seatSession(req),roomOwnerToken:roomOwner(req),inviteToken:gameInvite(req)}));
         if (req.method === 'GET' && browserRoom[2] === 'strategies') { if (url.searchParams.get('view') !== 'global') return json(res, 403, {error:'global_view_required'}); assertRoomOwnerById(browserRoom[1], roomOwner(req)); return json(res, 200, getRoomStrategies(browserRoom[1])); }
-        if (req.method === 'POST' && browserRoom[2] === 'join') { const data = await body(req); return json(res, 200, joinAvailableRoomPlayer(browserRoom[1], String(data.playerId || 'h5-player-auto'), data.displayName, {seatSessionToken:seatSession(req)})); }
+        if (req.method === 'POST' && browserRoom[2] === 'join') { const data = await body(req); return playerJson(req, res, joinAvailableRoomPlayer(browserRoom[1], String(data.playerId || 'h5-player-auto'), data.displayName, {seatSessionToken:seatSession(req)})); }
         if (req.method === 'POST' && browserRoom[2] === 'ready') { const data = await body(req); return json(res, 200, readyRoom(browserRoom[1], Number(data.seatId), {seatSessionToken:seatSession(req)})); }
         if (req.method === 'POST' && browserRoom[2] === 'actions') { const data = await body(req); const state = submitRoomAction(browserRoom[1], data.gameId, Number(data.seatId), data.action, data.seq, {source:'player',seatSessionToken:seatSession(req)}); return json(res, 200, {ok:true,gameId:state.gameId,seq:state.seq}); }
         if (req.method === 'POST' && browserRoom[2] === 'invites') { const data = await body(req); return json(res, 201, createRoomInvite(browserRoom[1], data.inviteType, data.seatId, roomOwner(req))); }
@@ -78,7 +80,7 @@ const handleRequest = async (req, res) => {
     if (browserInvite) {
       try {
         if (req.method === 'GET' && !browserInvite[2]) return json(res, 200, resolveMatchInvite(browserInvite[1]));
-        if (req.method === 'POST' && browserInvite[2] === 'join') { const data = await body(req); return json(res, 200, joinPlayerInvite(browserInvite[1], data.playerId, data.displayName, seatSession(req))); }
+        if (req.method === 'POST' && browserInvite[2] === 'join') { const data = await body(req); return playerJson(req, res, joinPlayerInvite(browserInvite[1], data.playerId, data.displayName, seatSession(req))); }
       } catch (error) { return json(res, error.message === 'invite_not_found' ? 404 : 400, { protocol:'agent-game.v1', ok:false, error:error.message }); }
     }
     const agentInvite = url.pathname.match(/^\/agent\/v1\/invites\/([^/]+)(?:\/(join))?$/);
@@ -125,15 +127,13 @@ const handleRequest = async (req, res) => {
         if (agentMatch[2] === 'review' && req.method === 'POST') return json(res, 200, submitMatchReview(agentMatch[1], seatId, data.review));
       } catch (error) { return json(res, 400, { protocol:'agent-game.v1', ok:false, error:error.message }); }
     }
-    const reconnect = url.pathname.match(/^\/api\/games\/([^/]+)\/reconnect$/);
-    if (req.method === 'POST' && reconnect) { const data = await body(req); try { return json(res, 200, reconnectPlayerMatch(reconnect[1], data.reconnectCode)); } catch (error) { return json(res, 400, {ok:false,error:error.message}); } }
     const removePlayer = url.pathname.match(/^\/api\/games\/([^/]+)\/players\/([0-2])$/);
     if (req.method === 'DELETE' && removePlayer) { try { return json(res, 200, removeDisconnectedPlayer(removePlayer[1], Number(removePlayer[2]), roomOwner(req))); } catch (error) { return json(res, error.message === 'room_owner_required' ? 403 : 400, {ok:false,error:error.message}); } }
     const match = url.pathname.match(/^\/api\/games\/([^/]+)(?:\/(state|strategies|join|start|actions|invites))?$/); if (!match) return json(res, 404, { error: 'not_found' });
     const game = getMatch(match[1]); if (!game) return json(res, 404, { error: 'game_not_found' });
-    if (req.method === 'GET' && match[2] === 'state') { const seat = Number(url.searchParams.get('seat')); const revealAll = url.searchParams.get('view') === 'global'; try { return json(res, 200, observeMatch(match[1], seat, { requireAuthorization:true, revealAll, seatSessionToken:seatSession(req), controlSeatId:seatSessionSeat(req), roomOwnerToken:roomOwner(req), inviteToken:gameInvite(req) })); } catch (error) { return json(res, ['room_owner_required', 'access_denied'].includes(error.message) ? 403 : 400, {error:error.message}); } }
+    if (req.method === 'GET' && match[2] === 'state') { const seat = Number(url.searchParams.get('seat')); const revealAll = url.searchParams.get('view') === 'global'; try { return json(res, 200, observeMatch(match[1], seat, { requireAuthorization:true, revealAll, seatSessionToken:seatSession(req), roomOwnerToken:roomOwner(req), inviteToken:gameInvite(req) })); } catch (error) { return json(res, ['room_owner_required', 'access_denied'].includes(error.message) ? 403 : 400, {error:error.message}); } }
     if (req.method === 'GET' && match[2] === 'strategies') { if (url.searchParams.get('view') !== 'global') return json(res, 403, { error:'global_view_required' }); try { assertMatchRoomOwner(match[1], roomOwner(req)); return json(res, 200, getMatchStrategies(match[1])); } catch (error) { return json(res, 403, { error:error.message }); } }
-    if (req.method === 'POST' && match[2] === 'join') { const data = await body(req); try { const automatic = data.seatId === undefined || data.seatId === null || data.seatId === 'auto'; const options = { seatSessionToken:seatSession(req) }; return json(res, 200, automatic ? joinAvailablePlayerMatch(match[1], String(data.playerId || 'h5-player-auto'), data.displayName, options) : joinPlayerMatch(match[1], Number(data.seatId), String(data.playerId || `h5-player-${data.seatId}`), data.displayName, options)); } catch (error) { return json(res, 400, {ok:false,error:error.message}); } }
+    if (req.method === 'POST' && match[2] === 'join') { const data = await body(req); try { const automatic = data.seatId === undefined || data.seatId === null || data.seatId === 'auto'; const options = { seatSessionToken:seatSession(req) }; const result = automatic ? joinAvailablePlayerMatch(match[1], String(data.playerId || 'h5-player-auto'), data.displayName, options) : joinPlayerMatch(match[1], Number(data.seatId), String(data.playerId || `h5-player-${data.seatId}`), data.displayName, options); return playerJson(req, res, result); } catch (error) { return json(res, 400, {ok:false,error:error.message}); } }
     if (req.method === 'POST' && match[2] === 'start') { const data = await body(req); try { return json(res, 200, startMatch(match[1], Number(data.seatId), { seatSessionToken:seatSession(req) })); } catch (error) { return json(res, 400, {ok:false,error:error.message}); } }
     if (req.method === 'POST' && match[2] === 'actions') { const data = await body(req); try { const state = submitMatchAction(match[1], Number(data.seatId), data.action, data.seq, { source:'player', seatSessionToken:seatSession(req) }); return json(res, 200, { ok: true, seq: state.seq }); } catch (error) { return json(res, 400, { ok: false, error: error.message }); } }
     if (req.method === 'POST' && match[2] === 'invites') { const data = await body(req); try { return json(res, 201, createMatchInvite(match[1], data.inviteType, data.seatId, roomOwner(req))); } catch (error) { return json(res, error.message === 'room_owner_required' ? 403 : 400, {ok:false,error:error.message}); } }
