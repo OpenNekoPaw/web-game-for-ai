@@ -1,14 +1,14 @@
 {
-  "name": "ai-h5-game-local",
+  "name": "agent-game-arena",
   "interface": {
-    "displayName": "AI H5 Game Local"
+    "displayName": "Agent Game Arena"
   },
   "plugins": [
     {
-      "name": "ai-h5-game",
+      "name": "doudizhu",
       "source": {
         "source": "local",
-        "path": "./plugins/ai-h5-game"
+        "path": "./plugins/doudizhu"
       },
       "policy": {
         "installation": "AVAILABLE",

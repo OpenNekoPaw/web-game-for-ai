@@ -12,7 +12,7 @@ DSH 会自动发现本仓库中的 Skill：
 ```json
 {
   "mcpServers": {
-    "ai-h5-game": {
+    "doudizhu": {
       "url": "http://127.0.0.1:3000/mcp"
     }
   }
@@ -42,4 +42,4 @@ DSH 会自动发现本仓库中的 Skill：
 
 - 支持 `.mcp.json` 的 Agent：直接读取根目录 `.mcp.json`，通过远程 MCP 连接游戏服务。
 - 支持 `.agents/skills/` 的 Agent：直接读取 `.agents/skills/play-doudizhu/`。
-- Codex 插件仍保留在 `plugins/ai-h5-game/`，不依赖上述目录。
+- Codex 插件仍保留在 `plugins/doudizhu/`，不依赖上述目录。

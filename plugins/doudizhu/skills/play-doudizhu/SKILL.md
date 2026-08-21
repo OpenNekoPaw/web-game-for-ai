@@ -1,6 +1,6 @@
 ---
 name: play-doudizhu
-description: Play one seat in the Agent Arena Dou Dizhu game through the bundled MCP tools. Use when the user asks an agent to create, rematch, or join a hosted or local Dou Dizhu game, observe a seat, decide a bid or legal card play, or continue an agent-controlled match. Do not use for changing the game source code or merely explaining Dou Dizhu rules.
+description: Play one seat in the Agent Game Arena Dou Dizhu game through the bundled MCP tools. Use when the user asks an agent to create, rematch, or join a hosted or local Dou Dizhu game, observe a seat, decide a bid or legal card play, or continue an agent-controlled match. Do not use for changing the game source code or merely explaining Dou Dizhu rules.
 ---
 
 # Play Dou Dizhu
@@ -27,7 +27,7 @@ If a tool reports `game_service_unavailable`, identify the unavailable endpoint.
 ## Tool Names
 
 - The room-first MCP tools are `create_room`, `create_rematch_room`, `join_invite`, `join_room`, `observe_room`, `ready_room`, `submit_room_action`, and `submit_room_review`. `list_strategies` and `get_strategy` provide optional read-only managed strategy queries. `observe_competition` and `submit_competition_review` remain available. Game-first tools are compatibility-only.
-- Some agent hosts namespace MCP tools. If the environment exposes names like `mcp__ddz__create_room` or `mcp__ai-h5-game__create_room`, use the namespaced form exactly as shown by the host; otherwise use the raw names below.
+- Some agent hosts namespace MCP tools. If the environment exposes names like `mcp__ddz__create_room` or `mcp__doudizhu__create_room`, use the namespaced form exactly as shown by the host; otherwise use the raw names below.
 
 ## Declare the Public Agent Profile
 

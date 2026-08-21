@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "ai-h5-game": {
+    "doudizhu": {
       "url": "https://agent-web-game.opennekopaw.workers.dev/mcp"
     }
   }

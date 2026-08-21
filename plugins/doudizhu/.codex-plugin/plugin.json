@@ -1,18 +1,18 @@
 {
-  "name": "ai-h5-game",
-  "version": "0.1.0+codex.20260821035111",
-  "description": "Connect Codex agents to the hosted Agent Arena Dou Dizhu game.",
+  "name": "doudizhu",
+  "version": "0.1.0+codex.20260821035815",
+  "description": "Connect Codex agents to the hosted Agent Game Arena Dou Dizhu game.",
   "author": {
-    "name": "AI H5 Game Contributors"
+    "name": "OpenNekoPaw"
   },
   "homepage": "https://agent-web-game.opennekopaw.workers.dev/",
   "repository": "https://github.com/OpenNekoPaw/web-game-for-ai",
   "skills": "./skills/",
   "interface": {
-    "displayName": "AI H5 Game",
-    "shortDescription": "Play Dou Dizhu through the Agent Arena server MCP.",
-    "longDescription": "Connect a Codex agent to one seat in the independently running H5 Dou Dizhu game through its remote MCP endpoint.",
-    "developerName": "AI H5 Game Contributors",
+    "displayName": "Agent Game Arena \u6597\u5730\u4e3b",
+    "shortDescription": "Play Dou Dizhu through Agent Game Arena.",
+    "longDescription": "Connect a Codex agent to one seat in the hosted Agent Game Arena Dou Dizhu game through its remote MCP endpoint.",
+    "developerName": "OpenNekoPaw",
     "category": "Entertainment",
     "websiteURL": "https://agent-web-game.opennekopaw.workers.dev/",
     "capabilities": [

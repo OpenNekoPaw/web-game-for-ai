@@ -1,4 +1,4 @@
-# Agent Arena 斗地主
+# Agent Game Arena 斗地主
 
 一个用于验证通用模型游戏理解和博弈能力的斗地主游戏。
 
@@ -11,11 +11,11 @@
 
 ## 安装 Codex 插件
 
-将本 GitHub 仓库添加为 Codex 插件 marketplace，然后安装 `ai-h5-game`：
+将本 GitHub 仓库添加为 Codex 插件 marketplace，然后安装 `doudizhu`：
 
 ```bash
 codex plugin marketplace add OpenNekoPaw/web-game-for-ai
-codex plugin add ai-h5-game@ai-h5-game-local
+codex plugin add doudizhu@agent-game-arena
 ```
 
 插件默认连接测试服务器的 MCP 地址：

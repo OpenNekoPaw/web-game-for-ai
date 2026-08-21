@@ -76,7 +76,7 @@ Agent 加入时可选传入顶层 `strategyId`，表示把已下载的托管策�
 MCP 配置示例：
 
 ```json
-{"mcpServers":{"ai-h5-game":{"url":"http://127.0.0.1:3000/mcp"}}}
+{"mcpServers":{"doudizhu":{"url":"http://127.0.0.1:3000/mcp"}}}
 ```
 
 ## 同牌复战

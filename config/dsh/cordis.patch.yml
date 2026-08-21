@@ -1,4 +1,4 @@
-# DeepSeek Harness (DSH) MCP patch for the AI H5 Game server MCP.
+# DeepSeek Harness (DSH) MCP patch for the Agent Game Arena Dou Dizhu server MCP.
 #
 # Usage (from this repository root):
 #   npm start
@@ -6,10 +6,10 @@
 #
 # The MCP client connects to the running game server; no repository-local command is spawned.
 - insert:
-    - id: ai-h5-game
+    - id: doudizhu
       name: '@deepseek-ai/dsh-mcp-client'
       config:
-        serverName: ai-h5-game
+        serverName: doudizhu
         transport: streamable-http
         url: http://127.0.0.1:3000/mcp
         toolCallTimeoutMs: 60000

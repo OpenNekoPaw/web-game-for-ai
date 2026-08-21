@@ -116,7 +116,7 @@ jobs:
         run: |
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release create "$RELEASE_TAG" \
-              --title "Agent Arena 斗地主 $RELEASE_TAG" \
+              --title "Agent Game Arena 斗地主 $RELEASE_TAG" \
               --generate-notes \
               --verify-tag
           fi

@@ -212,14 +212,14 @@ function renderAgentConnect(type) {
       title: 'Codex 接入',
       description: '安装项目自带插件，一次获得斗地主 Skill 和 MCP 工具。',
       label: '在项目目录运行',
-      value: `codex plugin marketplace add .\ncodex plugin add ai-h5-game@ai-h5-game-local`,
+      value: `codex plugin marketplace add .\ncodex plugin add doudizhu@agent-game-arena`,
       note: `游戏服务：${origin}`
     },
     mcp: {
       title: '通用 MCP 接入',
       description: '适用于支持远程 MCP 的 Agent。MCP Server 运行在游戏服务端，不需要安装本地连接器。',
       label: 'MCP 配置',
-      value: JSON.stringify({ mcpServers:{ 'ai-h5-game':{ url:`${origin}/mcp` } } }, null, 2),
+      value: JSON.stringify({ mcpServers:{ doudizhu:{ url:`${origin}/mcp` } } }, null, 2),
       note: '收到 Agent 邀请链接后使用 join_invite；本地策略由 Agent 自己读取，不上传游戏服务。'
     }
   };
