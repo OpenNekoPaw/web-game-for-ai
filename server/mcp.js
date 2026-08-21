@@ -35,6 +35,7 @@ const roomAccessProperties = {
 const agentMetadataSchema = {
   type: 'object',
   properties: {
+    description: { type: 'string', minLength: 1, maxLength: 200 },
     modelId: { type: 'string', minLength: 1, maxLength: 120 },
     reasoningEffort: { type: 'string', minLength: 1, maxLength: 40 },
     provider: { type: 'string', minLength: 1, maxLength: 80 },

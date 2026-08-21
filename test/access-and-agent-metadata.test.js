@@ -40,6 +40,7 @@ test('agent metadata is normalized, replayed, and locked when the seat is ready'
   const initial = joinMatch(game.gameId, 0, 'agent-a', undefined, 'Agent A', {
     strategyMode: 'local',
     agentMetadata: {
+      description: '擅长残局规划与农民协作',
       modelId: 'gpt-5.6',
       reasoningEffort: 'high',
       provider: 'openai',
@@ -50,6 +51,7 @@ test('agent metadata is normalized, replayed, and locked when the seat is ready'
   });
   assert.deepEqual(initial.seatControllers[0].agentMetadata, {
     source: 'declared',
+    description: '擅长残局规划与农民协作',
     modelId: 'gpt-5.6',
     reasoningEffort: 'high',
     provider: 'openai',
@@ -57,6 +59,7 @@ test('agent metadata is normalized, replayed, and locked when the seat is ready'
     strategyId: 'local-default',
     strategyHash: 'sha256:abc'
   });
+  assert.equal(initial.seatControllers[0].strategyMode, 'local');
 
   joinMatch(game.gameId, 0, 'agent-a', undefined, undefined, {
     strategyMode: 'local',
@@ -108,5 +111,8 @@ test('invalid access and metadata inputs are rejected', () => {
   const game = createMatch();
   assert.throws(() => joinMatch(game.gameId, 0, 'agent-a', undefined, undefined, {
     agentMetadata: {}
+  }), /invalid_agent_metadata/);
+  assert.throws(() => joinMatch(game.gameId, 1, 'agent-b', undefined, undefined, {
+    agentMetadata: { description: 'x'.repeat(201) }
   }), /invalid_agent_metadata/);
 });

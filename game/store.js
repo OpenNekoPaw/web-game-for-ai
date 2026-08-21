@@ -1091,6 +1091,7 @@ function seatControllers(game) {
         type: 'agent',
         id: game.agents.get(seatId),
         displayName: game.displayNames?.get(seatId) || game.agents.get(seatId),
+        strategyMode: game.localStrategySeats?.has(seatId) ? 'local' : game.agentStrategies?.has(seatId) ? 'server' : 'unspecified',
         ...(game.agentMetadata?.has(seatId) ? { agentMetadata: structuredClone(game.agentMetadata.get(seatId)) } : {})
       }
     : { type: 'player', id: game.players.get(seatId), displayName: game.displayNames?.get(seatId) || `玩家 ${['A', 'B', 'C'][seatId]}` }]));
@@ -1570,6 +1571,7 @@ function normalizeAgentMetadata(value) {
   if (value === null) return null;
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid_agent_metadata');
   const fields = {
+    description: normalizeOptionalMetadataText(value.description, 200),
     modelId: normalizeOptionalMetadataText(value.modelId, 120),
     reasoningEffort: normalizeOptionalMetadataText(value.reasoningEffort, 40),
     provider: normalizeOptionalMetadataText(value.provider, 80),

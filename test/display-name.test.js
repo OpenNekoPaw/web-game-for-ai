@@ -10,8 +10,8 @@ test('seat controllers expose display names without replacing stable ids', () =>
   joinPlayerMatch(game.gameId, 2, 'local-player-id', '本地玩家 C');
 
   const state = observeMatch(game.gameId, 0);
-  assert.deepEqual(state.seatControllers[0], { type: 'agent', id: 'codex-seat-a', displayName: '策略 Agent A' });
-  assert.deepEqual(state.seatControllers[1], { type: 'agent', id: 'codex-seat-b', displayName: 'codex-seat-b' });
+  assert.deepEqual(state.seatControllers[0], { type: 'agent', id: 'codex-seat-a', displayName: '策略 Agent A', strategyMode: 'server' });
+  assert.deepEqual(state.seatControllers[1], { type: 'agent', id: 'codex-seat-b', displayName: 'codex-seat-b', strategyMode: 'server' });
   assert.deepEqual(state.seatControllers[2], { type: 'player', id: 'local-player-id', displayName: '本地玩家 C' });
 });
 
