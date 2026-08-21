@@ -205,6 +205,8 @@
 .agent-connect-actions { display: grid; grid-template-columns: 1fr; gap: 7px; margin-top: 10px; }
 .agent-copy-button { width: 100%; padding: 10px 14px; border: 0; border-radius: 7px; background: var(--gold); color: #5b3b04; font: inherit; font-weight: 800; cursor: pointer; }
 .agent-copy-button:disabled { cursor: default; opacity: .55; }
+.agent-resource-link { box-sizing: border-box; display: block; text-align: center; text-decoration: none; }
+.agent-copy-button:hover, .agent-copy-button:focus-visible { outline: none; filter: brightness(1.08); }
 .agent-guide-status { display: block; margin: 10px 2px 0; color: var(--muted); font-size: 11px; }
 .agent-connect-note { display: block; margin: 12px 2px 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
 

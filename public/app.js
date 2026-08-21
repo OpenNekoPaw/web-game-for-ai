@@ -32,10 +32,14 @@ let strategySnapshotGameId = null;
 let strategyLoading = false;
 let selectedRounds = 1;
 let selectedAgentType = null;
-let agentGuide = null;
-let agentGuideLoading = false;
 let participantSeat = null;
 let participantHideTimer = null;
+
+const AGENT_RESOURCES = Object.freeze({
+  skill: 'https://github.com/OpenNekoPaw/web-game-for-ai/tree/main/.agents/skills/play-doudizhu',
+  strategy: 'https://github.com/OpenNekoPaw/web-game-for-ai/blob/main/strategies/ddz/default.md',
+  github: 'https://github.com/OpenNekoPaw/web-game-for-ai/tree/main'
+});
 
 const $ = (id) => document.getElementById(id);
 async function readJson(response) {
@@ -195,26 +199,9 @@ function setAgentPanel(open, type = selectedAgentType) {
     $('history-panel').hidden = true;
     selectedAgentType = type || 'mcp';
     renderAgentConnect(selectedAgentType);
-    loadAgentGuide().then(() => renderAgentConnect(selectedAgentType));
   }
   $('agent-panel').hidden = !open;
   updateSidePanelLayout();
-}
-
-async function loadAgentGuide() {
-  if (agentGuide || agentGuideLoading) return agentGuide;
-  agentGuideLoading = true;
-  try {
-    const response = await fetch('/api/agent-guide');
-    const data = await readJson(response);
-    if (!response.ok) throw new Error(data.error || 'agent_guide_failed');
-    agentGuide = data;
-  } catch (error) {
-    showMessage(`Agent 指南加载失败：${errorText(error.message)}`, true);
-  } finally {
-    agentGuideLoading = false;
-  }
-  return agentGuide;
 }
 
 function renderAgentConnect(type) {
@@ -256,39 +243,29 @@ function renderAgentConnect(type) {
     const copied = await copyText(preset.value);
     showMessage(copied ? '配置已复制' : '复制失败，请手动选择', !copied);
   };
-  const guideCopy = document.createElement('button');
-  guideCopy.className = 'agent-copy-button agent-guide-button';
-  guideCopy.type = 'button';
-  guideCopy.textContent = agentGuideLoading ? '加载 Skill…' : '复制 Skill';
-  guideCopy.disabled = agentGuideLoading || !agentGuide;
-  guideCopy.onclick = async () => {
-    const copied = await copyText(agentGuide?.markdown || '');
-    showMessage(copied ? 'Skill 已复制' : '复制失败，请手动选择', !copied);
-  };
-  const guideDownload = document.createElement('button');
-  guideDownload.className = 'agent-copy-button agent-guide-button';
-  guideDownload.type = 'button';
-  guideDownload.textContent = '下载 SKILL.md';
-  guideDownload.disabled = agentGuideLoading || !agentGuide;
-  guideDownload.onclick = () => {
-    if (!agentGuide?.markdown) return;
-    const blob = new Blob([agentGuide.markdown], { type:'text/markdown;charset=utf-8' });
+  const resourceLinks = [
+    ['查看 Skill', AGENT_RESOURCES.skill],
+    ['查看默认策略', AGENT_RESOURCES.strategy],
+    ['GitHub 项目地址', AGENT_RESOURCES.github]
+  ].map(([text, href]) => {
     const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = agentGuide.fileName || 'SKILL.md';
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(link.href), 0);
-  };
-  const guideStatus = document.createElement('small');
-  guideStatus.className = 'agent-guide-status';
-  guideStatus.textContent = agentGuide?.hash ? `Skill hash ${agentGuide.hash.slice(0, 8)}` : 'Skill 由服务端当前文件提供';
+    link.className = 'agent-copy-button agent-resource-link';
+    link.href = href;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = text;
+    return link;
+  });
+  const resourceStatus = document.createElement('small');
+  resourceStatus.className = 'agent-guide-status';
+  resourceStatus.textContent = 'Skill 与默认策略由 Agent 从 GitHub 获取并在本地执行。';
   const note = document.createElement('small');
   note.className = 'agent-connect-note';
   note.textContent = preset.note;
   const actions = document.createElement('div');
   actions.className = 'agent-connect-actions';
-  actions.append(copy, guideCopy, guideDownload);
-  content.append(description, label, code, actions, guideStatus, note);
+  actions.append(copy, ...resourceLinks);
+  content.append(description, label, code, actions, resourceStatus, note);
 }
 
 async function copyText(value) {
