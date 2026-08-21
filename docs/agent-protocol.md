@@ -26,7 +26,7 @@ MVP 使用服务端远程 MCP（JSON-RPC over HTTP）。服务端是唯一裁判
 - `open`：默认值。知道 `roomId` 的玩家或 Agent 可以直接占用空席。
 - `private`：玩家和 Agent 默认必须通过对应邀请 token 加入；直接调用 `join_room` 或 `/rooms/:roomId/join` 会被拒绝。赛事管理方也可预先设置 `allowedAgentIds` 或 `allowedPlayerIds`，允许名单中的稳定身份直接加入。
 
-接入策略仍不是完整的账户认证系统，但浏览器接口会保护私有观察、创建邀请、全局牌面和管理操作：座位私有视角要求 `seatSessionToken`，全局牌面要求 `roomOwnerToken`，私人房间的无座位观战要求有效观战邀请。`room.accessMode` 是唯一可修改的配置来源；创建比赛和单局时，服务端把当时的值快照到 `competition.accessMode` 和 `game.accessMode`，用于历史审计与回放，不允许三层独立修改。
+接入策略仍不是完整的账户认证系统，但浏览器接口会保护私有观察、创建邀请、全局牌面和管理操作：普通玩家座位由 HttpOnly 浏览器会话 Cookie 保护，全局牌面要求 `roomOwnerToken`，私人房间的无座位观战要求有效观战邀请。`room.accessMode` 是唯一可修改的配置来源；创建比赛和单局时，服务端把当时的值快照到 `competition.accessMode` 和 `game.accessMode`，用于历史审计与回放，不允许三层独立修改。
 
 Room 只公开“公开房间”和“私人房间”两种类型。旧单局兼容接口仍可读取历史 `invite_only` 值，但创建 Room 时会将该旧值迁移为 `private`，不会形成第三种房间类型。
 
@@ -130,20 +130,17 @@ H5 首页先在本地提供 `1/3/5/7 局`和公开/私人房间设置，此时�
 
 ### 普通玩家座位会话与掉线
 
-普通玩家首次占座成功后，响应额外返回：
+普通玩家首次占座成功后，服务端设置 `ddz_browser_session` Cookie。该 Cookie 使用随机不可猜测值，并带有 `HttpOnly`、`SameSite=Lax` 和 `Path=/`；HTTPS 环境同时带有 `Secure`。H5 JavaScript 不能读取凭证，后续观察、准备和动作由浏览器自动携带 Cookie。
 
-- `seatSessionToken`：不可猜测的座位控制凭证。H5 保存到当前站点的 `localStorage`，后续观察、准备和动作通过 `x-seat-session-token` 请求头提交。
-- `reconnectCode`：8 位跨设备重连码。输入到 `POST /api/rooms/:roomId/reconnect` 后，服务端返回新的 Token 和重连码，并立即废止旧设备的 Token。
-
-知道公开的 `playerId` 不能重连、准备或替该座位出牌。相同 `playerId` 未提供有效 Token 时返回 `seat_session_required`。
+服务端在每个 Room 中把玩家座位绑定到该浏览器会话，同一浏览器会话不能在同一 Room 占用多个玩家座位。刷新、重新打开同一站点的 Room URL 或切换同站点端口时，服务端会根据 Cookie 自动找回真实座位，不信任 URL 中的座位或公开 `playerId`。当前产品不处理跨浏览器、跨设备和清除 Cookie 后的身份恢复，因此不提供重连码。
 
 掉线规则：
 
-1. H5 约每 1.2 秒观察一次牌局；携带有效 Token 的观察同时作为心跳。
+1. H5 约每 1.2 秒观察一次牌局；携带有效会话 Cookie 的观察同时作为心跳。
 2. 10 秒没有有效心跳后，等待阶段显示为 `offline`，开局后显示为 `managed`。
-3. 等待阶段连续掉线 60 秒后自动释放座位；释放后旧 Token 与重连码失效。
+3. 等待阶段连续掉线 60 秒后自动释放座位；释放后该浏览器会话不再拥有该座位。
 4. 开局后永不因掉线释放座位。轮到掉线玩家时，托管策略立即执行保守动作，并以 `source=managed` 写入动作和回放记录。
-5. 原玩家带有效 Token 恢复心跳，或使用重连码跨设备恢复后，立即退出托管。
+5. 原浏览器恢复请求和心跳后立即退出托管。
 
 创建房间响应还会返回 `roomOwnerToken`。房主只能在开局前移除已经离线的普通玩家：
 
@@ -152,12 +149,12 @@ DELETE /api/rooms/:roomId/players/:seatId
 x-room-owner-token: <roomOwnerToken>
 ```
 
-在线玩家返回 `player_still_online`；开局后返回 `game_already_started`。`seatPresence` 按座位返回 `online`、`offline` 或 `managed`，供 H5 展示掉线和托管状态。Token 与重连码均不得写入 URL、公开状态或回放。
+在线玩家返回 `player_still_online`；开局后返回 `game_already_started`。`seatPresence` 按座位返回 `online`、`offline` 或 `managed`，供 H5 展示掉线和托管状态。浏览器会话凭证不得写入 URL、JSON 响应、公开状态或回放。
 
 ### 中断恢复与存储生命周期
 
-- Room、Competition 与活动 Game 均以内存状态运行。Room 元数据在创建、加入、重连、释放、移除、准备、开局、换局和关闭等权威变化时保存；活动牌局以 `game:<gameId>` 保存动作检查点。普通观察和 UI 状态不触发持久化。
-- 玩家心跳、普通观察、每秒倒计时、连接数、UI 状态和被拒绝的非法动作不触发持久化。回合只保存 `turnDeadlineAt`，客户端根据 `serverNow` 计算剩余时间。座位 Token 与重连码在加入或重连等权威变化时保存，不依赖公开的 `playerId`。
+- Room、Competition 与活动 Game 均以内存状态运行。Room 元数据在创建、加入、释放、移除、准备、开局、换局和关闭等权威变化时保存；活动牌局以 `game:<gameId>` 保存动作检查点。普通观察和 UI 状态不触发持久化。
+- 玩家心跳、普通观察、每秒倒计时、连接数、UI 状态和被拒绝的非法动作不触发持久化。回合只保存 `turnDeadlineAt`，客户端根据 `serverNow` 计算剩余时间。座位与浏览器会话的绑定在加入等权威变化时保存，不依赖公开的 `playerId`。
 - Durable Object 休眠、迁移或 Worker 更新后，从对应牌局的最近检查点恢复。中断超过 10 分钟仍未恢复的活动牌局标记为 `aborted`，不再继续；已结束牌局的热状态保留 5 分钟后移除。
 - 回放独立于活动状态保存。内部格式只保存初始状态和后续增量，读取接口仍返回兼容的完整 `frames`；私人回放凭证随回放元数据保存，但不会出现在 URL、公开观察或回放响应中。
 - 全局元数据保存 Room、比赛汇总、未过期邀请和 ID 游标，不包含完整牌局或完整回放。过期邀请和失效活动状态会被清理。
@@ -234,12 +231,12 @@ Agent 可以附加可公开的结构化决策摘要；该字段可选，不影�
 - 只提交可公开的结论摘要，不要发送模型思维链、完整提示词、私有工具日志或基于隐藏牌的推测。
 - 摘要写入对局记录，仅在 H5 全局视角和回放中展示。
 
-错误包括：`players_not_ready`、`game_not_started`、`game_already_started`、`not_your_turn`、`stale_state`、`illegal_play`、`cards_not_in_hand`、`cannot_pass_first`、`invalid_decision`、`seat_session_required`、`invalid_reconnect_code`、`room_owner_required`、`player_still_online`。
+错误包括：`players_not_ready`、`game_not_started`、`game_already_started`、`not_your_turn`、`stale_state`、`illegal_play`、`cards_not_in_hand`、`cannot_pass_first`、`invalid_decision`、`seat_session_required`、`room_owner_required`、`player_still_online`。
 
 ## MVP 限制
 
 - 服务只返回原始牌局信息并校验最终动作，不提供牌型分析、候选动作排序、策略推荐或农民协同字段。模型必须根据私有手牌、公开状态、规则和本局策略自行决策。
-- 普通玩家座位和房主管理操作已有局部 Token 鉴权，但当前没有账户、登录、封禁或全平台权限体系；Agent HTTP 接口仍依赖调用方身份约定。
+- 普通玩家座位使用 HttpOnly 浏览器会话 Cookie，房主管理操作使用局部 Token 鉴权，但当前没有账户、登录、跨设备恢复、封禁或全平台权限体系；Agent HTTP 接口仍依赖调用方身份约定。
 - MCP 通过 HTTP 请求承载 JSON-RPC；旧 HTTP Agent 路径保留兼容，动作与观察字段保持兼容。
 - 服务端不替代空座，但会为已占座且掉线的普通玩家托管。在线玩家和 Agent 的回合固定为 60 秒；超时属于裁判兜底。托管和超时均在叫地主阶段自动“不叫”、抢地主阶段自动“不抢”、跟牌阶段自动“不要”，必须领出时选择一个最小合法动作。
 - Node 本地服务在进程内保存牌局；Cloudflare 部署使用 Durable Object 串行处理请求，并按牌局保存短时恢复检查点。只有权威状态变化触发写入，观察、心跳、倒计时和被拒绝的动作不写入。

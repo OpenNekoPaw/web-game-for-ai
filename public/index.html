@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/cards.css?v=2" />
   <link rel="stylesheet" href="/styles.css?v=5" />
   <link rel="stylesheet" href="/header.css?v=4" />
-  <link rel="stylesheet" href="/lifecycle.css?v=21" />
+  <link rel="stylesheet" href="/lifecycle.css?v=22" />
   <link rel="stylesheet" href="/cards-adapter.css?v=10" />
 </head>
 <body>
@@ -20,7 +20,6 @@
       </div>
       <div class="game-info">
         <button id="invite-game" type="button" aria-haspopup="menu" aria-controls="invite-menu" aria-expanded="false">邀请</button>
-        <button id="session-code-header" type="button" hidden>重连码</button>
         <button id="global-view" class="view-toggle" type="button" aria-pressed="false">全局牌面</button>
         <nav class="perspectives" aria-label="切换视角"><button data-seat="0" type="button">A</button><button data-seat="1" type="button">B</button><button data-seat="2" type="button">C</button></nav>
         <div id="replay-controls" class="replay-controls" aria-label="回放控制" hidden>
@@ -56,7 +55,7 @@
       <div class="seat opponent seat-left" id="left-seat"><div class="player"><span class="avatar" id="left-avatar">B</span><span><strong id="left-name">玩家 B</strong><small id="left-count">17 张</small><small id="left-countdown" class="seat-timer" hidden></small></span></div><div id="left-cards" class="opponent-cards opponent-back-stack left"></div><div id="left-play" class="played-slot"></div></div>
       <div class="seat opponent seat-right" id="right-seat"><div class="player"><span class="avatar" id="right-avatar">C</span><span><strong id="right-name">玩家 C</strong><small id="right-count">17 张</small><small id="right-countdown" class="seat-timer" hidden></small></span></div><div id="right-cards" class="opponent-cards opponent-back-stack right"></div><div id="right-play" class="played-slot"></div></div>
       <div class="seat seat-self" id="self-seat"><div class="player"><span class="avatar" id="self-avatar">A</span><span><strong id="self-name">你的手牌</strong><small id="self-count">17 张</small><small id="self-countdown" class="seat-timer" hidden></small></span></div><div id="self-play" class="played-slot"></div><footer class="actions"><button id="bid" class="primary">叫地主</button><button id="decline" class="secondary">不叫</button><button id="pass" class="secondary">不要</button><button id="play" class="primary">出牌</button></footer><div id="my-hand" class="hand"></div></div>
-      <div class="middle"><div id="game-lifecycle" class="game-lifecycle" hidden><strong id="game-status"></strong><small id="ready-status"></small><div id="player-join" class="player-join" hidden><button id="join-game" type="button">加入对局</button></div><div id="reconnect-tools" class="reconnect-tools" hidden><input id="reconnect-code" type="text" maxlength="9" autocomplete="one-time-code" placeholder="输入 8 位重连码" aria-label="重连码"><button id="reconnect-game" type="button">恢复座位</button></div><div id="session-info" class="session-info" hidden><span>重连码 <b id="session-reconnect-code"></b></span><button id="copy-reconnect-code" type="button">复制</button></div><div id="owner-seat-controls" class="owner-seat-controls" hidden></div><div id="match-setup" class="match-setup"><div class="setup-row"><span>比赛局数</span><div class="round-options" role="group" aria-label="比赛局数"><button type="button" data-rounds="1">1局</button><button type="button" data-rounds="3">3局</button><button type="button" data-rounds="5">5局</button><button type="button" data-rounds="7">7局</button></div></div><div class="setup-row"><span>房间类型</span><div class="access-options" role="group" aria-label="房间类型"><button type="button" data-access-mode="open">公开房间</button><button type="button" data-access-mode="invite_only">私人房间</button></div></div></div><button id="confirm-setup" class="primary" type="button" hidden>确认配置</button><button id="start-game" class="primary" type="button"></button></div><div class="bottom"><span>底牌</span><div id="bottom-cards" class="bottom-cards"></div></div></div>
+      <div class="middle"><div id="game-lifecycle" class="game-lifecycle" hidden><strong id="game-status"></strong><small id="ready-status"></small><div id="player-join" class="player-join" hidden><button id="join-game" type="button">加入对局</button></div><div id="owner-seat-controls" class="owner-seat-controls" hidden></div><div id="match-setup" class="match-setup"><div class="setup-row"><span>比赛局数</span><div class="round-options" role="group" aria-label="比赛局数"><button type="button" data-rounds="1">1局</button><button type="button" data-rounds="3">3局</button><button type="button" data-rounds="5">5局</button><button type="button" data-rounds="7">7局</button></div></div><div class="setup-row"><span>房间类型</span><div class="access-options" role="group" aria-label="房间类型"><button type="button" data-access-mode="open">公开房间</button><button type="button" data-access-mode="invite_only">私人房间</button></div></div></div><button id="confirm-setup" class="primary" type="button" hidden>确认配置</button><button id="start-game" class="primary" type="button"></button></div><div class="bottom"><span>底牌</span><div id="bottom-cards" class="bottom-cards"></div></div></div>
       <aside id="participant-panel" class="participant-popover" role="tooltip" aria-label="参赛者信息" hidden>
         <div id="participant-content" class="decision-list participant-content"></div>
       </aside>
@@ -88,6 +87,6 @@
       <div id="message" class="message" role="status"></div>
     </section>
   </main>
-  <script type="module" src="/app.js?v=52"></script>
+  <script type="module" src="/app.js?v=53"></script>
 </body>
 </html>

@@ -52,14 +52,7 @@
 .player-join { display: flex; flex-direction: column; align-items: center; gap: 7px; width: 100%; margin-top: 5px; }
 .player-join[hidden] { display: none; }
 .game-lifecycle #join-game { width: 100%; margin: 0; }
-.reconnect-tools { display: flex; gap: 6px; width: 100%; }
-.reconnect-tools[hidden], .session-info[hidden], .owner-seat-controls[hidden] { display: none; }
-.reconnect-tools input { min-width: 0; flex: 1; padding: 8px 9px; border: 1px solid #d0e6ff55; border-radius: 6px; outline: 0; background: #082b5d; color: #fff; font: inherit; text-transform: uppercase; }
-.reconnect-tools input:focus { border-color: var(--gold); }
-.reconnect-tools button { flex: none; margin: 0; padding: 8px 10px; }
-.session-info { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 7px 9px; border-radius: 6px; background: #082b5d99; color: var(--muted); font-size: 11px; }
-.session-info b { color: #fff; letter-spacing: .12em; }
-.session-info button { margin: 0; padding: 5px 8px; font-size: 10px; }
+.owner-seat-controls[hidden] { display: none; }
 .owner-seat-controls { display: grid; gap: 5px; width: 100%; }
 .owner-seat-controls button { width: 100%; margin: 0; padding: 7px 9px; background: #edf6ff; color: #245083; font-size: 11px; }
 
