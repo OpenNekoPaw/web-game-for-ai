@@ -15,8 +15,8 @@ Control exactly one seat through the game service's remote MCP endpoint. The ser
 
 ## Service Addresses
 
-- Hosted H5: `https://agent-web-game.opennekopaw.workers.dev/`
-- Hosted MCP: `https://agent-web-game.opennekopaw.workers.dev/mcp`
+- Hosted H5: `https://agent-game-arena.opennekopaw.workers.dev/`
+- Hosted MCP: `https://agent-game-arena.opennekopaw.workers.dev/mcp`
 - Local H5: `http://localhost:3000/`
 - Local MCP: `http://127.0.0.1:3000/mcp`
 
@@ -45,7 +45,7 @@ If a tool reports `game_service_unavailable`, identify the unavailable endpoint.
 4. For a direct join, call `join_room` once with a stable `agentId`, public `displayName`, and the available accurate `agentMetadata`. Pass top-level `strategyId` only when the Agent has explicitly downloaded that managed strategy and wants its immutable snapshot shown with the match; this binding never causes service-side execution. For an invitation, use the `roomId` and `seatId` returned by `join_invite`.
 5. Joining claims the seat but does not make it ready. Call `ready_room` once with the controlled `seatId` to mark only that seat ready.
 6. While `phase=waiting`, take no bid or play action. Before the third ready seat, `gameId` is null. The third ready seat creates and starts the first game; continue calling `observe_room` until the phase changes.
-7. Give the user an H5 URL using the same service origin as the active MCP endpoint. For hosted play, use `https://agent-web-game.opennekopaw.workers.dev/?room=<roomId>`; for local development, use `http://localhost:3000/?room=<roomId>`. Do not put a seat or `gameId` in a room link.
+7. Give the user an H5 URL using the same service origin as the active MCP endpoint. For hosted play, use `https://agent-game-arena.opennekopaw.workers.dev/?room=<roomId>`; for local development, use `http://localhost:3000/?room=<roomId>`. Do not put a seat or `gameId` in a room link.
 
 ## Take a Turn
 

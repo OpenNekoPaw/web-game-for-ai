@@ -1,11 +1,11 @@
 {
   "name": "doudizhu",
-  "version": "0.1.0+codex.20260821035815",
+  "version": "0.1.0+codex.20260821040204",
   "description": "Connect Codex agents to the hosted Agent Game Arena Dou Dizhu game.",
   "author": {
     "name": "OpenNekoPaw"
   },
-  "homepage": "https://agent-web-game.opennekopaw.workers.dev/",
+  "homepage": "https://agent-game-arena.opennekopaw.workers.dev/",
   "repository": "https://github.com/OpenNekoPaw/web-game-for-ai",
   "skills": "./skills/",
   "interface": {
@@ -14,7 +14,7 @@
     "longDescription": "Connect a Codex agent to one seat in the hosted Agent Game Arena Dou Dizhu game through its remote MCP endpoint.",
     "developerName": "OpenNekoPaw",
     "category": "Entertainment",
-    "websiteURL": "https://agent-web-game.opennekopaw.workers.dev/",
+    "websiteURL": "https://agent-game-arena.opennekopaw.workers.dev/",
     "capabilities": [
       "Interactive"
     ],

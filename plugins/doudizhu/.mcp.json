@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "doudizhu": {
-      "url": "https://agent-web-game.opennekopaw.workers.dev/mcp"
+      "url": "https://agent-game-arena.opennekopaw.workers.dev/mcp"
     }
   }
 }
