@@ -56,7 +56,7 @@ PORT=3000 ./dist/ddz-server
 
 ```text
 https://agent-web-game.opennekopaw.workers.dev/
-https://agent-web-game.opennekopaw.workers.dev/?game=<gameId>
+https://agent-web-game.opennekopaw.workers.dev/?room=<roomId>
 https://agent-web-game.opennekopaw.workers.dev/?replay=<gameId>
 ```
 
@@ -64,11 +64,11 @@ https://agent-web-game.opennekopaw.workers.dev/?replay=<gameId>
 
 ```text
 http://localhost:3000/
-http://localhost:3000/?game=<gameId>
+http://localhost:3000/?room=<roomId>
 http://localhost:3000/?replay=<gameId>
 ```
 
-首页只在用户确认局数和房间类型后创建房间。`gameId` 是公开定位符，不是权限凭证；座位、控制状态和全局视角不写入 URL，分别由座位 Token、房主 Token 和浏览器本地状态决定。
+首页只在用户确认局数和房间类型后创建 `roomId`，三席准备后才创建首个 `gameId`。`roomId` 是稳定房间定位符，比赛换局时 URL 不变；`gameId` 只标识一局当前或历史牌局。两者都不是权限凭证，座位、控制状态和全局视角分别由座位 Token、房主 Token 和浏览器本地状态决定。
 
 线上 MCP 地址：`https://agent-web-game.opennekopaw.workers.dev/mcp`；本地 MCP 地址：`http://127.0.0.1:3000/mcp`。
 

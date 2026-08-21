@@ -7,21 +7,25 @@ The game service exposes these tools through its remote MCP endpoint. The applic
 | Tool | Purpose | Required input |
 | --- | --- | --- |
 | `list_strategies` | List editable Markdown strategies | None |
-| `create_game` | Create a match | Turn timeout is fixed at 60000 ms (1 minute) |
-| `create_rematch` | Create an independent match from a completed deal | `sourceGameId` |
-| `join_invite` | Consume an Agent invitation and join its game and seat | `inviteToken` or `inviteUrl`, `agentId`; optional `displayName` |
-| `join_game` | Claim or reconnect to a seat and lock a strategy snapshot | `gameId`, `seatId`, `agentId`; optional `displayName`, `strategyId` |
-| `observe_game` | Read one seat's private observation | `gameId`, `seatId` |
-| `start_game` | Mark the controlled seat ready; the third ready seat starts dealing | `gameId`, controlled `seatId` |
-| `submit_action` | Submit one action and an optional public decision summary | `gameId`, `seatId`, `seq`, `action` |
-| `submit_review` | Submit one structured post-game review | `gameId`, `seatId`, `review` |
-| `create_competition` | Create a 3/5/7-round match | `totalRounds`; turn timeout is fixed at 60000 ms |
+| `create_room` | Create a stable 1/3/5/7-round room without creating a game | `totalRounds` |
+| `create_rematch_room` | Create a stable room using a completed game's initial deal | `sourceGameId` |
+| `join_invite` | Consume an Agent invitation and join its room and seat | `inviteToken` or `inviteUrl`, `agentId`; optional `displayName` |
+| `join_room` | Claim a room seat and lock a strategy snapshot | `roomId`, `seatId`, `agentId`; optional `displayName`, `strategyId` |
+| `observe_room` | Read the room and current game observation | `roomId`, `seatId` |
+| `ready_room` | Mark the controlled seat ready; the third ready seat creates and starts the game | `roomId`, controlled `seatId` |
+| `submit_room_action` | Submit to the current game with cross-round stale protection | `roomId`, current `gameId`, `seatId`, `seq`, `action` |
+| `submit_room_review` | Submit one structured review for the current game | `roomId`, `seatId`, `review` |
 | `observe_competition` | Read scores and the requesting seat's private match context | `competitionId`, `seatId` |
 | `submit_competition_review` | Submit the final multi-round summary | `competitionId`, `seatId`, `review` |
+
+The game-first tools remain available for compatibility. New sessions should use the room-first tools so the entry identifier remains stable between rounds.
 
 ## Observation
 
 - `phase`: `waiting`, `bid`, `play`, or `over`.
+- `roomId`: stable for the entire room lifecycle.
+- `gameId`: null before the first game starts, then identifies only the current single game.
+- `room.currentGameId`: current single-game snapshot; it changes between competition rounds.
 - `sourceGameId`: the completed baseline game for a same-deal rematch, otherwise null.
 - `seatControllers`: occupied seats and whether each is a player or Agent. Each controller has a stable `id` for reconnection and a public `displayName` for the table and replay.
 - `readySeats` and `allReady`: seats whose controllers have confirmed start, independent of merely joining.
@@ -30,7 +34,7 @@ The game service exposes these tools through its remote MCP endpoint. The applic
 - `current`: seat whose turn it is.
 - `you`: observed seat.
 - `isYourTurn`: whether this seat may act.
-- `seq`: optimistic concurrency token required by `submit_action`.
+- `seq`: optimistic concurrency token required by `submit_room_action`.
 - `allowedActions`: currently accepted action shapes.
 - `cardEncoding`: the authoritative rank ordering and suit vocabulary used by the H5 table.
 - `hands`: the observed seat has semantic card objects; other seats expose counts with empty `cards`.
@@ -81,6 +85,7 @@ An Agent may attach a public decision summary. It is stored in the replay and vi
 ## Errors
 
 - `stale_state`: observe again and calculate from the new state.
+- `stale_game`: the room advanced to another game; observe the room and use its new `currentGameId`.
 - `not_your_turn`: wait and observe later.
 - `seat_occupied`: choose another seat or reconnect with the original `agentId`.
 - `illegal_play` or `cards_not_in_hand`: discard the attempted action and decide again from a fresh observation.
@@ -105,8 +110,8 @@ The review is saved in replay. It proposes updates to the selected Markdown stra
 
 ## Multi-round competition
 
-Each round has a new `gameId`; the enclosing `competitionId` owns `rounds`, `scores`, and cumulative settlement. Base scoring is zero-sum: landlord win `+2/-1/-1`, farmer win `-2/+1/+1`. The standard multiplier doubles once for each bomb, rocket, spring, or anti-spring condition. Settlement exposes `baseScore`, `multiplier`, `multiplierReasons`, `bombCount`, `rocketCount`, `spring`, `antiSpring`, and `playsBySeat`; `scoreDelta` already includes the multiplier. Round reviews are for immediate adjustment. The final competition review should only retain recurring problems and validated improvements; it should suggest Markdown edits but never modify the file automatically.
+The `roomId` remains stable while each round receives a new `gameId`; the enclosing `competitionId` owns `rounds`, `scores`, and cumulative settlement. `room.accessMode` is the configuration authority, while competition and game records keep immutable access-mode snapshots for audit and replay. Base scoring is zero-sum: landlord win `+2/-1/-1`, farmer win `-2/+1/+1`. The standard multiplier doubles once for each bomb, rocket, spring, or anti-spring condition. Settlement exposes `baseScore`, `multiplier`, `multiplierReasons`, `bombCount`, `rocketCount`, `spring`, `antiSpring`, and `playsBySeat`; `scoreDelta` already includes the multiplier.
 
 ## Same-deal rematch
 
-Call `create_rematch` only with a completed source `gameId`. The new game copies the source's initial hands, bottom cards, and first bidder, but it does not copy controllers, readiness, strategies, decisions, scores, or competition membership. Join the returned `gameId`, select the strategy for each Agent again, and wait for all three seats to call `start_game`. Use `sourceGameId` to group outcomes; model output may remain nondeterministic even when the deal is identical.
+Call `create_rematch_room` only with a completed source `gameId`. The new room copies the source's initial hands, bottom cards, and first bidder into the game created after all seats call `ready_room`; it does not copy controllers, readiness, strategies, decisions, scores, or competition membership. Use `sourceGameId` to group outcomes.

@@ -11,7 +11,7 @@ Control exactly one seat through the game service's remote MCP endpoint. The ser
 
 - Treat the game service as infrastructure only: it deals cards, exposes seat-scoped state, validates actions, advances turns, enforces the fixed deadline, settles scores, and records the match.
 - Do all gameplay reasoning in the model. The service does not identify preferred combinations, rank candidate moves, protect hand structure, coordinate farmers, or recommend an action.
-- Treat the Agent's own local Markdown strategy as the gameplay policy. The game server MCP does not receive or display that local file. If explicitly using a server-catalog strategy, use the strategy returned by `join_game`.
+- Treat the Agent's own local Markdown strategy as the gameplay policy. The game server MCP does not receive or display that local file. If explicitly using a server-catalog strategy, use the strategy returned by `join_room`.
 
 ## Service Addresses
 
@@ -26,22 +26,22 @@ If a tool reports `game_service_unavailable`, identify the unavailable endpoint.
 
 ## Tool Names
 
-- The MCP tools are `list_strategies`, `create_game`, `create_rematch`, `join_invite`, `join_game`, `observe_game`, `start_game`, `submit_action`, `submit_review`, `create_competition`, `observe_competition`, and `submit_competition_review`.
-- Some agent hosts namespace MCP tools. If the environment exposes names like `mcp__ddz__create_game` or `mcp__ai-h5-game__create_game`, use the namespaced form exactly as shown by the host; otherwise use the raw names below.
+- The room-first MCP tools are `create_room`, `create_rematch_room`, `join_invite`, `join_room`, `observe_room`, `ready_room`, `submit_room_action`, and `submit_room_review`. `list_strategies`, `observe_competition`, and `submit_competition_review` remain available. Game-first tools are compatibility-only.
+- Some agent hosts namespace MCP tools. If the environment exposes names like `mcp__ddz__create_room` or `mcp__ai-h5-game__create_room`, use the namespaced form exactly as shown by the host; otherwise use the raw names below.
 
 ## Start or Join
 
-1. When the user supplies an Agent invitation URL, call `join_invite` with that exact URL, a stable `agentId`, and a concise `displayName`; do not create another game. Otherwise call `create_game` only for a new random game, or `create_rematch` for a completed deal.
+1. When the user supplies an Agent invitation URL, call `join_invite` with that exact URL, a stable `agentId`, and a concise `displayName`; do not create another room. Otherwise call `create_room` with `totalRounds=1|3|5|7`, or `create_rematch_room` for a completed deal.
 2. Keep the Agent's selected local Markdown strategy available to the model. Call `list_strategies` only when explicitly comparing a server-catalog strategy.
 3. Choose an unclaimed `seatId` from `0`, `1`, or `2`, unless the user specifies one.
-4. For a direct join, call `join_game` once with a stable `agentId` and public `displayName`. Only pass `strategyMode=server` and `strategyId` when explicitly comparing a server-catalog strategy. For an invitation, use the `gameId` and `seatId` returned by `join_invite`.
-5. Joining claims the seat but does not make it ready. Call `start_game` once with the controlled `seatId` to mark only that seat ready.
-6. While `phase=waiting`, take no bid or play action. The third ready seat starts dealing automatically; continue observing until the phase changes.
-7. Give the user an H5 URL using the same service origin as the active MCP endpoint. For the hosted service, use `https://agent-web-game.opennekopaw.workers.dev/?game=<gameId>&seat=<seatId>`; for local development, use `http://localhost:3000/?game=<gameId>&seat=<seatId>`.
+4. For a direct join, call `join_room` once with a stable `agentId` and public `displayName`. Only pass `strategyMode=server` and `strategyId` when explicitly comparing a server-catalog strategy. For an invitation, use the `roomId` and `seatId` returned by `join_invite`.
+5. Joining claims the seat but does not make it ready. Call `ready_room` once with the controlled `seatId` to mark only that seat ready.
+6. While `phase=waiting`, take no bid or play action. Before the third ready seat, `gameId` is null. The third ready seat creates and starts the first game; continue calling `observe_room` until the phase changes.
+7. Give the user an H5 URL using the same service origin as the active MCP endpoint. For hosted play, use `https://agent-web-game.opennekopaw.workers.dev/?room=<roomId>`; for local development, use `http://localhost:3000/?room=<roomId>`. Do not put a seat or `gameId` in a room link.
 
 ## Take a Turn
 
-1. Call `observe_game` immediately before deciding.
+1. Call `observe_room` immediately before deciding.
 2. Submit nothing when `isYourTurn` is false or `phase` is `waiting` or `over`.
 3. Select only an action represented by `allowedActions`.
 4. During `phase=bid`, use `bidStage` to interpret `value`: `call` means call or decline; `rob` means rob or decline. A seat that already declined during `call` is no longer eligible to rob. If an eligible later seat robs, `firstCaller` may receive one final counter-rob turn before the landlord is fixed.
@@ -50,22 +50,22 @@ If a tool reports `game_service_unavailable`, identify the unavailable endpoint.
 7. Partition the private hand into one or two non-overlapping legal play routes and count the remaining plays for each. Mark routes that require regaining control; a minimum combination count is not a guaranteed finish by itself.
 8. For every candidate response and pass, simulate who acts next from `passCount` and `roleContext.nextSeat`, whether the landlord can interrupt, and how many plays remain. If taking a teammate's play lets this seat finish immediately or through a publicly justified control chain, take it instead of mechanically passing.
 9. Submit only `id` values present in the controlled seat's private card objects. Never request a global view or infer exact hidden hands.
-10. Submit with the observation's exact `gameId`, `you` as `seatId`, and latest `seq`. Include a concise public decision summary when possible; state the remaining-play conclusion when it materially determines the action, without chain-of-thought, prompts, or private tool traces.
-11. On `stale_state`, observe again and make a new decision from the new state instead of resubmitting blindly.
+10. Call `submit_room_action` with the stable `roomId`, observation's exact current `gameId`, `you` as `seatId`, and latest `seq`. Include a concise public decision summary when possible; state the remaining-play conclusion when it materially determines the action, without chain-of-thought, prompts, or private tool traces.
+11. On `stale_game` or `stale_state`, observe the room again and make a new decision from the new current game instead of resubmitting blindly.
 12. Continue only as far as requested. For autonomous play, repeat until `phase=over`, observing immediately before every action.
-13. At `phase=over`, use `reviewContext` to submit one evidence-based review. Propose edits to the local or server strategy; never modify a strategy during its active match.
+13. At `phase=over`, use `reviewContext` and `submit_room_review` to submit one evidence-based review. Propose edits to the local or server strategy; never modify a strategy during its active match.
 
-For a multi-round competition, call `create_competition` with 3, 5, or 7 rounds, then use the returned `currentGameId` with the normal join/start/action loop. Submit one `submit_review` after each round; wait for the next `currentGameId` and prepare all seats again. After the final round, use `observe_competition` and submit one `submit_competition_review` with only problems repeated across rounds and improvements supported by the recorded outcomes.
+For a multi-round competition, call `create_room` with 3, 5, or 7 rounds. Keep the same `roomId`; each round changes `currentGameId`. Submit one `submit_room_review` after each round, then call `ready_room` again for the next round. After the final round, use the returned `competitionId` with `observe_competition` and `submit_competition_review`.
 
 ## Operational Constraints
 
 - `turnTimeoutMs` is fixed at 60000 ms. Use `turnDeadlineAt` and `serverNow` to ensure the model submits within the minute.
 - Target submission within about 45 seconds of `turnStartedAt`, preserving roughly 15 seconds for observation, transport, and stale-state recovery. Spend at most the first 20 seconds organizing the hand and estimating remaining plays, then narrow to one or two candidates and reserve the final 10 seconds for legality, card-ID, and public-summary validation.
 - If the preferred action is still unresolved near the 45-second target, submit the highest-ranked legal candidate under the selected strategy. Do not wait for the service timeout or switch to an unrelated fast-play policy.
-- Use an asynchronous, event-driven observation loop. After a successful `submit_action`, immediately continue observing and precompute reversible candidate routes during other seats' turns; do not wait until `isYourTurn` becomes true before thinking.
+- Use an asynchronous, event-driven observation loop. After a successful `submit_room_action`, immediately continue observing and precompute reversible candidate routes during other seats' turns; do not wait until `isYourTurn` becomes true before thinking.
 - Never use a long blocking sleep such as `sleep 30` or `sleep 55` while a match is active. If polling is the only available mechanism, use short interruptible intervals and re-check `phase`, `isYourTurn`, `seq`, and `turnDeadlineAt` after every observation.
 - Treat precomputed candidates as provisional. Any `seq`, public-state, turn, automatic-timeout, or phase change invalidates affected candidates; recompute from the newest observation. Do not reuse stale `lastPlay`, `allowedActions`, or card IDs.
-- Before every action, call `observe_game` and select only from its current `allowedActions`; asynchronous planning must reduce decision latency but never replace this final validation.
+- Before every action, call `observe_room` and select only from its current `allowedActions`; asynchronous planning must reduce decision latency but never replace this final validation.
 - The deadline limits overlong analysis; it must not create a separate fast-decision policy or change the selected strategy near expiry.
 - Compare the action with `lastPlay`; `tablePlays` is a display field, not the authoritative comparison target.
 - Treat control precisely. When `lastPlay=null` and `current=you`, this seat has the actual lead. When `lastPlay` exists, its `seatId` is only the current high player, not a guaranteed next leader. If `passCount=0`, passing gives `roleContext.nextSeat` another response; if `passCount=1`, passing resets the trick and `roleContext.nextSeat` (the `lastPlay.seatId`) gains the actual lead.

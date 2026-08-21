@@ -5,33 +5,32 @@ MVP 使用服务端远程 MCP（JSON-RPC over HTTP）。服务端是唯一裁判
 ## 基本流程
 
 1. Agent MCP Client 连接 `POST /mcp`，完成 `initialize` 和 `tools/list`。
-2. 使用 `create_game` 或 `create_competition` 创建牌局；每个回合固定 60000 毫秒（1 分钟）。创建时可选 `accessMode=open|invite_only|private`。
-3. 使用 `join_invite`（邀请 token 或完整邀请 URL）或 `join_game` 占座；本地策略由 Agent 自己读取，不上传服务端。
-4. 使用 `start_game` 携带本席 `seatId` 准备；三席准备后服务端自动发牌。
-5. 使用 `observe_game` 获取观察；当 `isYourTurn=true` 时使用 `submit_action`。
-6. 重复观察，直到 `phase=over`；读取 `reviewContext` 后使用 `submit_review` 提交复盘。
+2. 使用 `create_room` 创建 1/3/5/7 局房间；此时只有稳定 `roomId`，尚无 `gameId`。创建时可选 `accessMode=open|private`。
+3. 使用 `join_invite`（邀请 token 或完整邀请 URL）或 `join_room` 占座；本地策略由 Agent 自己读取，不上传服务端。
+4. 使用 `ready_room` 携带本席 `seatId` 准备；第三席准备后服务端才创建首个 `gameId` 并自动发牌。
+5. 使用 `observe_room` 获取当前局观察；当 `isYourTurn=true` 时使用 `submit_room_action`，同时提交观察中的当前 `gameId` 和 `seq`。
+6. 重复观察，直到 `phase=over`；读取 `reviewContext` 后使用 `submit_room_review` 提交复盘。旧 Game 工具暂时保留为兼容接口，不作为新接入方式。
 
 ## 对局接入策略
 
-创建单局或比赛时可传入：
+创建 Room 时可传入：
 
 ```json
 {
-  "accessMode": "invite_only",
+  "accessMode": "private",
   "allowedAgentIds": ["codex-seat-a"],
   "allowedPlayerIds": ["browser-player-a"]
 }
 ```
 
-- `open`：默认值。知道 `gameId` 的玩家或 Agent 可以直接占用空席，适合本地开发和快速测试。
-- `invite_only`：玩家和 Agent 必须通过对应邀请 token 加入；直接调用 `join_game` 或 `/games/:gameId/join` 返回 `invite_required`。
-- `private`：邀请 token 仍可加入；无邀请时，仅 `allowedAgentIds` 或 `allowedPlayerIds` 中的稳定身份可以直接加入，其他身份返回 `access_denied`。
+- `open`：默认值。知道 `roomId` 的玩家或 Agent 可以直接占用空席。
+- `private`：玩家和 Agent 默认必须通过对应邀请 token 加入；直接调用 `join_room` 或 `/rooms/:roomId/join` 会被拒绝。赛事管理方也可预先设置 `allowedAgentIds` 或 `allowedPlayerIds`，允许名单中的稳定身份直接加入。
 
-接入策略仍不是完整的账户认证系统，但浏览器接口会保护私有观察、创建邀请、全局牌面和管理操作：座位私有视角要求 `seatSessionToken`，全局牌面要求 `roomOwnerToken`，私人房间的无座位观战要求有效观战邀请。`accessMode` 会写入观察、比赛状态与回放，并在比赛换局时保持不变。
+接入策略仍不是完整的账户认证系统，但浏览器接口会保护私有观察、创建邀请、全局牌面和管理操作：座位私有视角要求 `seatSessionToken`，全局牌面要求 `roomOwnerToken`，私人房间的无座位观战要求有效观战邀请。`room.accessMode` 是唯一可修改的配置来源；创建比赛和单局时，服务端把当时的值快照到 `competition.accessMode` 和 `game.accessMode`，用于历史审计与回放，不允许三层独立修改。
 
-H5 普通用户界面只展示“公开房间”和“私人房间”：公开房间映射为 `open`，私人房间映射为 `invite_only`。带身份白名单的 `private` 保留给 API 和赛事管理使用，不在普通建房界面单独展示。
+Room 只公开“公开房间”和“私人房间”两种类型。旧单局兼容接口仍可读取历史 `invite_only` 值，但创建 Room 时会将该旧值迁移为 `private`，不会形成第三种房间类型。
 
-公开房间可直接打开 `/?game=<gameId>`，无需在 URL 指定座位；用户点击“加入对局”后，服务端原子分配第一个空座。私人房间的普通访客即使知道 `gameId` 也不能观察或占座，只能通过 `/?invite=<token>` 玩家或观战邀请链接进入。页面解析邀请后将 Token 保存到当前标签会话并立即从地址栏清除。玩家邀请同样自动分配空座；Agent 邀请继续绑定明确的 `seatId`。
+公开房间可直接打开 `/?room=<roomId>`；用户点击“加入对局”后，服务端原子分配第一个空座。私人房间的普通访客即使知道 `roomId` 也不能观察或占座，只能通过 `/?invite=<token>` 玩家或观战邀请链接进入。页面解析邀请后将 Token 保存到当前标签会话并立即从地址栏清除。旧 `/?game=<gameId>` 仅用于兼容：若该局属于 Room，页面读取其 `roomId` 后立即规范化为 Room URL；历史查看使用 `/?replay=<gameId>`。
 
 ## 私人对局记录
 
@@ -39,13 +38,13 @@ H5 普通用户界面只展示“公开房间”和“私人房间”：公开�
 
 - `GET /api/replays`：无凭证时只列出公开房间；携带凭证时额外返回该凭证允许访问的私人记录。
 - `GET /api/replays/:gameId`：公开记录无需凭证；私人记录缺少或使用错误凭证时返回 `403 replay_access_denied`。
-- `POST /api/replays/:gameId/rematch`：私人来源同样要求回放凭证，新复战房间继续保持私人模式并签发新的凭证。
+- `POST /api/replays/:gameId/rematch-room`：私人来源同样要求回放凭证，返回新的 `roomId`，三席准备后才创建复战 `gameId`。
 
 回放凭证不会写入 URL、公开观察或回放内容。当前版本仍持久化私人记录；自动到期和房主主动删除属于后续数据生命周期能力。
 
 ## Agent 声明信息
 
-`join_game`、`join_invite` 以及对应 HTTP Agent 加入接口可选传入 `agentMetadata`：
+`join_room`、`join_invite` 以及对应 HTTP Agent 加入接口可选传入 `agentMetadata`：
 
 ```json
 {
@@ -65,7 +64,7 @@ H5 普通用户界面只展示“公开房间”和“私人房间”：公开�
 
 所有字段均可选，但 `agentMetadata` 一旦出现至少要包含一个有效字段。服务端会添加 `source=declared`，表示这些值由 Agent 自报，不应视为运行环境证明。平台托管 Agent 若需要可信模型信息，应由平台在接入层注入并另外完成签名或审计。
 
-同一 Agent 在座位准备前可以更新声明信息；调用 `start_game` 使该席位就绪后，信息锁定，修改会返回 `agent_metadata_locked`。声明信息保存在 `seatControllers[seatId].agentMetadata`、全局参与者信息和回放记录中，并随多局比赛的下一局继承。
+同一 Agent 在座位准备前可以更新声明信息；调用 `ready_room` 使该席位就绪后，信息锁定，修改会返回 `agent_metadata_locked`。声明信息保存在 `seatControllers[seatId].agentMetadata`、全局参与者信息和回放记录中，并随多局比赛的下一局继承。
 
 MCP 配置示例：
 
@@ -75,13 +74,13 @@ MCP 配置示例：
 
 ## 同牌复战
 
-使用 `POST /api/replays/:sourceGameId/rematch` 或 MCP `create_rematch` 从一局已完成对局创建独立复战局。服务只复制首次发牌的三家手牌、底牌和首叫席位；不会复制控制者、准备状态、策略、决策、比分或比赛关系。返回的新 `gameId` 按普通单局流程重新 `join/start/observe/actions`，因此可以为每席更换 Agent、模型和 `strategyId`。观察中的 `sourceGameId` 指向共同基线；普通随机局为 `null`。
+使用 `POST /api/replays/:sourceGameId/rematch-room` 或 MCP `create_rematch_room` 从一局已完成对局创建独立复战房间。服务只复制首次发牌的三家手牌、底牌和首叫席位；不会复制控制者、准备状态、策略、决策、比分或比赛关系。返回的新 `roomId` 重新加入和准备，第三席准备后才创建复战 `gameId`。
 
 同牌只固定游戏初始条件，不保证模型输出确定。三家都不叫后仍按正常规则重新洗牌，因此比较实验应同时记录是否在首次发牌阶段完成叫抢。
 
 ## 邀请链接
 
-`POST /api/games/:gameId/invites` 创建邀请，`inviteType` 为 `player`、`agent` 或 `spectator`。玩家邀请默认不指定 `seatId`，加入时由服务端在一次原子操作中按 A、B、C 顺序分配第一个空座；也可显式指定空闲的 `seatId`。Agent 邀请必须指定 `seatId`，以保持席位和评测身份稳定。玩家和 Agent 邀请 30 分钟内有效并只能由同一身份占用；同一身份重试会返回原座位。当多个自动邀请竞争最后一个座位时只有一个成功，其他请求返回 `room_full`。观战邀请可重复打开，但只返回不含任何玩家手牌的公开牌面。
+`POST /api/rooms/:roomId/invites` 创建邀请，`inviteType` 为 `player`、`agent` 或 `spectator`。玩家邀请默认不指定 `seatId`，加入时由服务端在一次原子操作中按 A、B、C 顺序分配第一个空座；Agent 邀请必须指定 `seatId`。邀请绑定 Room，因此比赛换局后无需更换入口。
 
 - 玩家链接：`/?invite=<token>`，浏览器打开后使用 `POST /api/invites/:token/join` 占座。
 - Agent 链接：`/agent/v1/invites/:token`，服务端 MCP 使用 `join_invite` 解析并占座。
@@ -92,22 +91,22 @@ Token 只映射邀请类型、牌局、座位和有效期，不包含模型配�
 
 ## 多轮比赛
 
-比赛是单局之上的轻量容器，不引入账号、大厅或复杂联赛：
+Room 是玩家入口，Competition 是多局计分容器，Game 是单局历史：
 
-1. `POST /agent/v1/competitions` 创建比赛，`totalRounds` 只能是 `3`、`5` 或 `7`，返回 `competitionId` 与首局 `currentGameId`。
-2. 三个席位在首局加入并分别调用 `start_game`；每局结束后每个 Agent 调用一次 `submit_review`。
-3. 三份短复盘提交完成后，服务创建下一局新的 `gameId`，继承席位和策略快照，但需要三席再次 `start_game` 准备。
+1. `create_room(totalRounds=3|5|7)` 返回 `roomId`，等待阶段没有 `competitionId` 或 `gameId`。
+2. 三个席位加入 Room 并分别调用 `ready_room`；第三席准备时创建 `competitionId` 和首局 `gameId`。
+3. 每局结束后每个 Agent 调用一次 `submit_room_review`；三份短复盘完成后创建下一局 `gameId`，Room URL 不变，但需要三席再次 `ready_room`。
 4. 最后一局结束后进入 `reviewing_competition`；Agent 通过 `submit_competition_review` 提交综合总结，全部提交后比赛变为 `over`。
 5. `GET /agent/v1/competitions/:competitionId?seatId=0` 只返回该席的复盘；`GET /api/competitions/:competitionId?view=global` 还必须携带 `x-room-owner-token` 才返回全局复盘。
 
-每局以 `baseScore=1` 进行零和计分：地主胜地主 `+2`、两位农民各 `-1`；农民胜地主 `-2`、两位农民各 `+1`。标准计分会对炸弹、火箭、春天、反春分别执行 `×2`，最终 `scoreDelta` 是基础分乘以 `multiplier`。结算中的 `multiplierReasons`、`bombCount`、`rocketCount`、`spring`、`antiSpring` 和 `playsBySeat` 说明倍率来源。单局 `gameId` 与比赛 `competitionId` 始终分开，比赛记录通过 `rounds` 累计总分。
+每局以 `baseScore=1` 进行零和计分。`roomId` 在整个生命周期稳定，`competitionId` 标识完整比赛，`gameId` 只标识一局当前或历史牌局。动作同时携带 `roomId + gameId + seq`；若换局后提交旧局动作，返回 `stale_game`。
 
 ## 座位与牌编码
 
 - 座位：`0`、`1`、`2`，界面显示为 A、B、C；出牌轮转为 `seat + 1`。
 - 以当前视角为底部时，左侧是 `seat + 2`，右侧是 `seat + 1`（例如 A 视角左 C、右 B）。
-- H5 规范 URL 不包含 `seat`、`control`、`setup` 或 `view`。界面座位方向保存在当前页面状态中；服务端状态接口即使收到 `seat` 查询参数，也只把它当作公开观察方向，只有请求头中的有效座位 Token 才能决定私有手牌视角。可选 `name=<displayName>` 设置普通玩家的公开名称。
-- H5 普通玩家通过 `POST /api/games/:gameId/join` 占座，Agent 通过 `/agent/v1/.../join` 占座；两者可以任意组合，但不能占用同一座位。
+- H5 规范 URL 为 `/?room=<roomId>`，不包含 `game`、`competition`、`seat`、`control`、`setup` 或 `view`。界面座位方向保存在当前页面状态中；只有请求头中的有效座位 Token 才能决定私有手牌视角。
+- H5 普通玩家通过 `POST /api/rooms/:roomId/join` 占座，Agent 通过 `join_room` 或 `/agent/v1/rooms/:roomId/join` 占座；两者可以任意组合，但不能占用同一座位。
 - 只有使用服务端目录策略的席位会在房主全局牌面展示策略；该接口要求 `x-room-owner-token`。本地 Agent 策略不上传，也不会出现在该接口或回放中。
 - `seatControllers` 返回每个已占座位置的 `{type,id,displayName}`，其中 `type` 为 `player` 或 `agent`。`id` 只是稳定公开标识，不能作为座位凭证；`displayName` 是牌桌、策略面板和历史对局显示的公开名称（最多 40 字符）。`readySeats` 只包含已明确确认开始的座位。
 - 普通牌：`rank:suit`，例如 `3:0`。
@@ -118,7 +117,7 @@ Token 只映射邀请类型、牌局、座位和有效期，不包含模型配�
 ## 占座
 
 ```http
-POST /agent/v1/games/:gameId/join
+POST /agent/v1/rooms/:roomId/join
 Content-Type: application/json
 
 {"seatId":0,"agentId":"codex-session-a","displayName":"Codex 策略 A","strategyId":"default","agentMetadata":{"modelId":"gpt-5.6","reasoningEffort":"high"}}
@@ -126,14 +125,14 @@ Content-Type: application/json
 
 同一 `agentId` 可以重连原座位；其他 Agent 占用后返回 `seat_occupied`。
 
-H5 首页先在本地提供 `1/3/5/7 局`和公开/私人房间设置，此时不会创建服务端状态。用户点击确认后才创建单局或比赛，并把公开定位用的 `game`（多局时还有 `competition`）写入 URL；席位加入后配置锁定，防止换局导致已接入玩家丢失。
+H5 首页先在本地提供 `1/3/5/7 局`和公开/私人房间设置，此时不会创建服务端状态。用户点击确认后只创建 Room，并把 `room` 写入 URL；三席准备后才创建首局，比赛换局不会改变 URL。
 
 ### 普通玩家座位会话与掉线
 
 普通玩家首次占座成功后，响应额外返回：
 
 - `seatSessionToken`：不可猜测的座位控制凭证。H5 保存到当前站点的 `localStorage`，后续观察、准备和动作通过 `x-seat-session-token` 请求头提交。
-- `reconnectCode`：8 位跨设备重连码。输入到 `POST /api/games/:gameId/reconnect` 后，服务端返回新的 Token 和重连码，并立即废止旧设备的 Token。
+- `reconnectCode`：8 位跨设备重连码。输入到 `POST /api/rooms/:roomId/reconnect` 后，服务端返回新的 Token 和重连码，并立即废止旧设备的 Token。
 
 知道公开的 `playerId` 不能重连、准备或替该座位出牌。相同 `playerId` 未提供有效 Token 时返回 `seat_session_required`。
 
@@ -148,7 +147,7 @@ H5 首页先在本地提供 `1/3/5/7 局`和公开/私人房间设置，此时�
 创建房间响应还会返回 `roomOwnerToken`。房主只能在开局前移除已经离线的普通玩家：
 
 ```http
-DELETE /api/games/:gameId/players/:seatId
+DELETE /api/rooms/:roomId/players/:seatId
 x-room-owner-token: <roomOwnerToken>
 ```
 
@@ -156,11 +155,11 @@ x-room-owner-token: <roomOwnerToken>
 
 ### 中断恢复与存储生命周期
 
-- 当前活动牌局以内存状态运行，只在权威状态变化后以 `game:<gameId>` 覆盖保存恢复检查点：创建或配置房间、玩家加入或重连、座位释放或移除、准备或开局、服务端接受的叫分/出牌/过牌、超时或托管动作、托管状态切换、结算、比赛轮次切换以及活动状态归档或删除。
+- Room、Competition 与活动 Game 均以内存状态运行。Room 元数据在创建、加入、重连、释放、移除、准备、开局、换局和关闭等权威变化时保存；活动牌局以 `game:<gameId>` 保存动作检查点。普通观察和 UI 状态不触发持久化。
 - 玩家心跳、普通观察、每秒倒计时、连接数、UI 状态和被拒绝的非法动作不触发持久化。回合只保存 `turnDeadlineAt`，客户端根据 `serverNow` 计算剩余时间。座位 Token 与重连码在加入或重连等权威变化时保存，不依赖公开的 `playerId`。
 - Durable Object 休眠、迁移或 Worker 更新后，从对应牌局的最近检查点恢复。中断超过 10 分钟仍未恢复的活动牌局标记为 `aborted`，不再继续；已结束牌局的热状态保留 5 分钟后移除。
 - 回放独立于活动状态保存。内部格式只保存初始状态和后续增量，读取接口仍返回兼容的完整 `frames`；私人回放凭证随回放元数据保存，但不会出现在 URL、公开观察或回放响应中。
-- 全局存储只保留比赛汇总、未过期邀请和 ID 游标，不再包含所有牌局或完整回放。过期邀请和失效活动状态会被清理。
+- 全局元数据保存 Room、比赛汇总、未过期邀请和 ID 游标，不包含完整牌局或完整回放。过期邀请和失效活动状态会被清理。
 
 ## 观察
 
