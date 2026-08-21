@@ -4,6 +4,7 @@ import { getStrategy, listStrategies } from './strategy-runtime.js';
 
 const games = new Map();
 const competitions = new Map();
+const rooms = new Map();
 const invites = new Map();
 const DEFAULT_TURN_TIMEOUT_MS = 60_000;
 const MAX_TURN_TIMEOUT_MS = 60_000;
@@ -16,6 +17,7 @@ const ACCESS_MODES = new Set(['open', 'invite_only', 'private']);
 const configuredTurnTimeoutMs = normalizeTurnTimeout(globalThis.process?.env?.TURN_TIMEOUT_MS);
 let lastGameTimestamp = 0;
 let lastCompetitionTimestamp = 0;
+let lastRoomTimestamp = 0;
 let authoritativeRevision = 0;
 let dirtyMetadataRevision = 0;
 const dirtyGameRevisions = new Map();
@@ -47,6 +49,7 @@ export function markAuthoritativeStatePersisted(state = {}) {
 
 export function createMatch(options = {}) {
   const game = createGame(nextGameId());
+  game.roomId = options.roomId || null;
   game.accessMode = normalizeAccessMode(options.accessMode);
   game.replayAccessToken = game.accessMode === 'open' ? null : normalizeReplayAccessToken(options.replayAccessToken) || createAccessToken();
   game.roomOwnerToken = normalizeAccessToken(options.roomOwnerToken) || createAccessToken();
@@ -85,10 +88,11 @@ export function createCompetition(options = {}) {
   const allowedAgentIds = [...normalizeIdentitySet(options.allowedAgentIds)];
   const allowedPlayerIds = [...normalizeIdentitySet(options.allowedPlayerIds)];
   const competitionId = nextCompetitionId();
-  const replayAccessToken = accessMode === 'open' ? null : createAccessToken();
-  const roomOwnerToken = createAccessToken();
+  const replayAccessToken = accessMode === 'open' ? null : normalizeReplayAccessToken(options.replayAccessToken) || createAccessToken();
+  const roomOwnerToken = normalizeAccessToken(options.roomOwnerToken) || createAccessToken();
   const competition = {
     competitionId,
+    roomId: options.roomId || null,
     totalRounds,
     currentRound: 1,
     currentGameId: null,
@@ -107,7 +111,7 @@ export function createCompetition(options = {}) {
     turnTimeoutMs: normalizeTurnTimeout(options.turnTimeoutMs ?? configuredTurnTimeoutMs)
   };
   competitions.set(competitionId, competition);
-  const game = createMatch({ competitionId, roundNumber: 1, turnTimeoutMs: competition.turnTimeoutMs, accessMode, allowedAgentIds, allowedPlayerIds, replayAccessToken, roomOwnerToken });
+  const game = createMatch({ roomId: competition.roomId, competitionId, roundNumber: 1, turnTimeoutMs: competition.turnTimeoutMs, accessMode, allowedAgentIds, allowedPlayerIds, replayAccessToken, roomOwnerToken });
   competition.currentGameId = game.gameId;
   competition.gameIds.push(game.gameId);
   markMetadataAuthoritative();
@@ -125,6 +129,19 @@ export function createRematch(sourceGameId, replayAccessToken) {
   return createMatch({ sourceGameId: rootSourceGameId, presetDeal, accessMode });
 }
 
+export function createRematchRoom(sourceGameId, replayAccessToken) {
+  const replay = readReplay(sourceGameId);
+  assertReplayAccess(sourceGameId, replayAccessToken, replay);
+  const finalState = replay.frames.at(-1)?.state;
+  if (finalState?.phase !== 'over' || !['landlord', 'farmers'].includes(finalState.winner)) throw new Error('rematch_source_not_completed');
+  const created = createRoom({ totalRounds: 1, accessMode: replayAccessMode(sourceGameId, replay) === 'open' ? 'open' : 'private' });
+  const room = requireRoom(created.roomId);
+  room.sourceGameId = replay.sourceGameId || finalState.sourceGameId || sourceGameId;
+  room.presetDeal = extractReplayDeal(replay);
+  markMetadataAuthoritative();
+  return withRoomCredentials(room, observeRoom(room.roomId, 0));
+}
+
 export function observeCompetition(competitionId, seatId = null, options = {}) {
   const competition = requireCompetition(competitionId);
   if (options.revealAll === true) assertRoomOwnerToken(competition.roomOwnerToken, options.roomOwnerToken);
@@ -136,6 +153,7 @@ export function observeCompetition(competitionId, seatId = null, options = {}) {
   return {
     protocol: 'agent-game.v1',
     competitionId,
+    roomId: competition.roomId || currentGame?.roomId || null,
     totalRounds: competition.totalRounds,
     currentRound: competition.currentRound,
     currentGameId: competition.currentGameId,
@@ -167,8 +185,239 @@ function nextCompetitionId() {
   return `match-${timestamp}`;
 }
 
+function nextRoomId() {
+  let roomId;
+  do roomId = `room-${crypto.randomUUID().replaceAll('-', '')}`;
+  while (rooms.has(roomId));
+  lastRoomTimestamp = Math.max(Date.now(), lastRoomTimestamp + 1);
+  return roomId;
+}
+
 export function getMatch(gameId) {
   return games.get(gameId) || null;
+}
+
+export function getRoom(roomId) {
+  return rooms.get(roomId) || null;
+}
+
+export function roomForGame(gameId) {
+  const roomId = games.get(gameId)?.roomId;
+  return roomId ? rooms.get(roomId) || null : null;
+}
+
+export function createRoom(options = {}) {
+  const accessMode = normalizeRoomAccessMode(options.accessMode);
+  const roomId = nextRoomId();
+  const room = {
+    roomId,
+    totalRounds: normalizeRoomRounds(options.totalRounds),
+    accessMode,
+    allowedAgentIds: normalizeIdentitySet(options.allowedAgentIds),
+    allowedPlayerIds: normalizeIdentitySet(options.allowedPlayerIds),
+    replayAccessToken: accessMode === 'open' ? null : createAccessToken(),
+    roomOwnerToken: createAccessToken(),
+    turnTimeoutMs: normalizeTurnTimeout(options.turnTimeoutMs ?? configuredTurnTimeoutMs),
+    status: 'waiting',
+    currentGameId: null,
+    competitionId: null,
+    gameIds: [],
+    agents: new Map(),
+    players: new Map(),
+    playerSessions: new Map(),
+    displayNames: new Map(),
+    agentMetadata: new Map(),
+    agentStrategies: new Map(),
+    localStrategySeats: new Set(),
+    ready: new Set(),
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    completedAt: null
+  };
+  rooms.set(roomId, room);
+  markMetadataAuthoritative();
+  return withRoomCredentials(room, observeRoom(roomId, 0));
+}
+
+export function observeRoom(roomId, seatId = 0, options = {}) {
+  const room = requireRoom(roomId);
+  maintainRoomPresence(room);
+  const requestedSeat = Number(seatId);
+  validateSeat(requestedSeat);
+  const controlSeat = options.controlSeatId === undefined ? requestedSeat : Number(options.controlSeatId);
+  const controlAuthorized = touchAuthorizedRoomPlayer(room, controlSeat, options.seatSessionToken);
+  const ownerAuthorized = roomOwnerTokenMatches(room.roomOwnerToken, options.roomOwnerToken);
+  const inviteAuthorized = spectatorInviteMatchesRoom(roomId, options.inviteToken);
+  if (options.requireAuthorization === true && room.accessMode !== 'open' && !controlAuthorized && !ownerAuthorized && !inviteAuthorized) {
+    throw new Error('access_denied');
+  }
+  if (options.requireAuthorization === true && options.revealAll === true && !ownerAuthorized) throw new Error('room_owner_required');
+  if (room.currentGameId) {
+    const state = observeMatch(room.currentGameId, requestedSeat, {
+      ...options,
+      controlSeatId: controlSeat,
+      seatSessionToken: options.seatSessionToken,
+      roomOwnerToken: options.roomOwnerToken,
+      inviteToken: options.inviteToken
+    });
+    return { ...state, roomId, room: roomSummary(room) };
+  }
+  const revealAll = options.revealAll === true && (!options.requireAuthorization || ownerAuthorized);
+  const privateSeat = options.requireAuthorization ? (controlAuthorized ? controlSeat : null) : requestedSeat;
+  const viewSeat = privateSeat ?? requestedSeat;
+  const lobby = createGame(null);
+  return {
+    protocol: 'agent-game.v1',
+    ...publicState(lobby, privateSeat, revealAll),
+    roomId,
+    accessMode: room.accessMode,
+    view: revealAll ? 'global' : privateSeat === null ? 'public' : 'player',
+    you: viewSeat,
+    controlAuthorized,
+    controlledSeat: controlAuthorized ? controlSeat : null,
+    roleContext: null,
+    isYourTurn: false,
+    allowedActions: [],
+    agentSeats: Object.fromEntries(room.agents),
+    playerSeats: Object.fromEntries(room.players),
+    seatControllers: seatControllers(room),
+    seatPresence: seatPresence(room),
+    readySeats: [...room.ready].sort(),
+    allReady: room.ready.size === 3,
+    settlement: null,
+    competition: null,
+    strategy: privateSeat !== null && room.agentStrategies.has(privateSeat) ? structuredClone(room.agentStrategies.get(privateSeat)) : null,
+    strategyAssignments: revealAll ? strategyAssignments(room) : {},
+    decisions: [],
+    reviews: {},
+    reviewStatus: { expectedSeats: [], submittedSeats: [], complete: false },
+    reviewContext: null,
+    turnTimeoutMs: room.turnTimeoutMs,
+    turnStartedAt: null,
+    turnDeadlineAt: null,
+    serverNow: Date.now(),
+    room: roomSummary(room)
+  };
+}
+
+export function joinRoomAgent(roomId, seatId, agentId, strategyId, displayName, options = {}) {
+  const room = requireRoom(roomId);
+  validateSeat(seatId);
+  assertRoomWaitingOrExisting(room, room.agents.get(seatId) === agentId);
+  assertSeatAdmission(room, 'agent', agentId, options.viaInvite === true);
+  if (room.players.has(seatId)) throw new Error('seat_occupied');
+  const occupant = room.agents.get(seatId);
+  if (occupant && occupant !== agentId) throw new Error('seat_occupied');
+  const metadata = options.agentMetadata === undefined ? room.agentMetadata.get(seatId) : normalizeAgentMetadata(options.agentMetadata);
+  if (room.ready.has(seatId) && options.agentMetadata !== undefined && !sameMetadata(room.agentMetadata.get(seatId), metadata)) throw new Error('agent_metadata_locked');
+  room.agents.set(seatId, agentId);
+  room.displayNames.set(seatId, room.displayNames.has(seatId) && displayName === undefined ? room.displayNames.get(seatId) : normalizeDisplayName(displayName, agentId));
+  if (options.agentMetadata !== undefined) {
+    if (metadata) room.agentMetadata.set(seatId, metadata); else room.agentMetadata.delete(seatId);
+  }
+  if (options.strategyMode === 'local') {
+    if (room.agentStrategies.has(seatId)) throw new Error('strategy_mismatch');
+    room.localStrategySeats.add(seatId);
+  } else if (room.localStrategySeats.has(seatId)) {
+    if (strategyId) throw new Error('strategy_mismatch');
+  } else if (!room.agentStrategies.has(seatId)) room.agentStrategies.set(seatId, getStrategy(strategyId));
+  else if (strategyId && room.agentStrategies.get(seatId).id !== strategyId) throw new Error('strategy_mismatch');
+  room.updatedAt = Date.now();
+  markMetadataAuthoritative();
+  return withRoomAccess(room, observeRoom(roomId, seatId));
+}
+
+export function joinRoomPlayer(roomId, seatId, playerId, displayName, options = {}) {
+  const room = requireRoom(roomId);
+  validateSeat(seatId);
+  const occupant = room.players.get(seatId);
+  assertRoomWaitingOrExisting(room, occupant === playerId);
+  if (room.agents.has(seatId)) throw new Error('seat_occupied');
+  if (occupant && occupant !== playerId) throw new Error('seat_occupied');
+  if (!occupant) assertSeatAdmission(room, 'player', playerId, options.viaInvite === true);
+  const existingSession = room.playerSessions.get(seatId);
+  if (occupant && existingSession && !existingSession.legacy && !options.viaInvite) assertSeatSession(room, seatId, options.seatSessionToken);
+  room.players.set(seatId, playerId);
+  room.displayNames.set(seatId, room.displayNames.has(seatId) && displayName === undefined ? room.displayNames.get(seatId) : normalizeDisplayName(displayName, `玩家 ${['A', 'B', 'C'][seatId]}`));
+  const session = ensurePlayerSession(room, seatId);
+  session.lastSeenAt = Date.now();
+  session.managed = false;
+  room.updatedAt = session.lastSeenAt;
+  markMetadataAuthoritative();
+  return withPlayerSession(room, seatId, withRoomAccess(room, observeRoom(roomId, seatId, { seatSessionToken: session.token, controlSeatId: seatId })));
+}
+
+export function joinAvailableRoomPlayer(roomId, playerId, displayName, options = {}) {
+  const room = requireRoom(roomId);
+  const identity = normalizeInviteIdentity(playerId, 'h5-player-auto');
+  const existingSeat = [...room.players.entries()].find(([, occupant]) => occupant === identity)?.[0];
+  if (existingSeat !== undefined) return joinRoomPlayer(roomId, existingSeat, identity, displayName, options);
+  const targetSeat = [0, 1, 2].find((seatId) => !occupiedSeats(room).includes(seatId));
+  if (targetSeat === undefined) throw new Error('room_full');
+  return joinRoomPlayer(roomId, targetSeat, identity, displayName, options);
+}
+
+export function readyRoom(roomId, seatId, options = {}) {
+  const room = requireRoom(roomId);
+  maintainRoomPresence(room);
+  if (room.status !== 'waiting') throw new Error('game_already_started');
+  validateSeat(seatId);
+  if (!occupiedSeats(room).includes(seatId)) throw new Error('seat_not_joined');
+  assertControllerSession(room, seatId, options.seatSessionToken);
+  room.ready.add(seatId);
+  room.updatedAt = Date.now();
+  if (occupiedSeats(room).length === 3 && room.ready.size === 3) {
+    if (room.currentGameId) startLinkedRoomGame(room, requireMatch(room.currentGameId));
+    else beginRoomMatch(room);
+  }
+  markMetadataAuthoritative();
+  return observeRoom(roomId, seatId, { seatSessionToken: options.seatSessionToken, controlSeatId: seatId });
+}
+
+export function submitRoomAction(roomId, gameId, seatId, action, expectedSeq, options = {}) {
+  const room = requireRoom(roomId);
+  if (!room.currentGameId) throw new Error('game_not_started');
+  if (gameId && gameId !== room.currentGameId) throw new Error('stale_game');
+  return submitMatchAction(room.currentGameId, seatId, action, expectedSeq, options);
+}
+
+export function reconnectRoomPlayer(roomId, reconnectCode) {
+  const room = requireRoom(roomId);
+  const target = room.currentGameId ? requireMatch(room.currentGameId) : room;
+  maintainPlayerPresence(target);
+  const normalizedCode = normalizeReconnectCode(reconnectCode);
+  const entry = [...target.playerSessions.entries()].find(([, session]) => session.reconnectCode === normalizedCode);
+  if (!entry) throw new Error('invalid_reconnect_code');
+  const [seatId, session] = entry;
+  session.token = createAccessToken();
+  session.reconnectCode = createReconnectCode(target);
+  session.lastSeenAt = Date.now();
+  session.managed = false;
+  room.playerSessions = target.playerSessions;
+  markMetadataAuthoritative();
+  return withPlayerSession(target, seatId, withRoomAccess(room, observeRoom(roomId, seatId, { seatSessionToken: session.token, controlSeatId: seatId })));
+}
+
+export function removeDisconnectedRoomPlayer(roomId, seatId, roomOwnerToken, now = Date.now()) {
+  const room = requireRoom(roomId);
+  validateSeat(seatId);
+  assertRoomOwner(room, roomOwnerToken);
+  if (room.status !== 'waiting') throw new Error('game_already_started');
+  if (!room.players.has(seatId)) throw new Error('player_not_joined');
+  if (!isPlayerOffline(room, seatId, now)) throw new Error('player_still_online');
+  releaseRoomPlayerSeat(room, seatId);
+  markMetadataAuthoritative();
+  return observeRoom(roomId, seatId);
+}
+
+export function assertRoomOwnerById(roomId, roomOwnerToken) {
+  assertRoomOwner(requireRoom(roomId), roomOwnerToken);
+}
+
+export function getRoomStrategies(roomId) {
+  const room = requireRoom(roomId);
+  const target = room.currentGameId ? requireMatch(room.currentGameId) : room;
+  return { protocol: 'agent-game.v1', roomId, gameId: room.currentGameId, participants: structuredClone(participants(target)) };
 }
 
 // Durable Object persistence boundary. The game engine remains synchronous so
@@ -181,8 +430,8 @@ export function exportStoreState(options = {}) {
     : [...games.entries()];
   const inviteEntries = [...invites.entries()].filter(([, invite]) => Number(invite.expiresAt) > now);
   const snapshot = {
-    competitions: [...competitions.entries()],
-    invites: inviteEntries, lastGameTimestamp, lastCompetitionTimestamp
+    rooms: [...rooms.entries()], competitions: [...competitions.entries()],
+    invites: inviteEntries, lastGameTimestamp, lastCompetitionTimestamp, lastRoomTimestamp
   };
   if (options.includeGames !== false) snapshot.games = gameEntries;
   if (options.includeReplays !== false) snapshot.replays = exportReplayState();
@@ -239,6 +488,12 @@ export function expireInterruptedMatches(now = Date.now()) {
       }
     }
     games.delete(game.gameId);
+    const room = game.roomId ? rooms.get(game.roomId) : null;
+    if (room?.currentGameId === game.gameId) {
+      room.status = 'aborted';
+      room.completedAt = now;
+      room.updatedAt = now;
+    }
     markGameAuthoritative(game.gameId);
     markMetadataAuthoritative();
     expiredGameIds.push(game.gameId);
@@ -254,7 +509,7 @@ export function expireInterruptedMatches(now = Date.now()) {
 
 export function importStoreState(snapshot = {}) {
   const decoded = JSON.parse(JSON.stringify(snapshot), snapshotReviver);
-  games.clear(); competitions.clear(); invites.clear();
+  games.clear(); competitions.clear(); rooms.clear(); invites.clear();
   for (const [id, game] of decoded.games || []) games.set(id, hydrateGame(game));
   for (const [id, competition] of decoded.competitions || []) {
     competition.roomOwnerToken = normalizeAccessToken(competition.roomOwnerToken)
@@ -266,9 +521,15 @@ export function importStoreState(snapshot = {}) {
     }
     competitions.set(id, competition);
   }
+  for (const [id, room] of decoded.rooms || []) rooms.set(id, hydrateRoom(room));
+  for (const room of rooms.values()) {
+    const game = room.currentGameId ? games.get(room.currentGameId) : null;
+    if (game) adoptCurrentGameState(room, game);
+  }
   for (const [id, invite] of decoded.invites || []) invites.set(id, invite);
   lastGameTimestamp = decoded.lastGameTimestamp || 0;
   lastCompetitionTimestamp = decoded.lastCompetitionTimestamp || 0;
+  lastRoomTimestamp = decoded.lastRoomTimestamp || 0;
   dirtyGameRevisions.clear();
   dirtyMetadataRevision = 0;
   importReplayState(decoded.replays || []);
@@ -354,6 +615,38 @@ export function createMatchInvite(gameId, inviteType, seatId, roomOwnerToken) {
   return publicInvite(invite);
 }
 
+export function createRoomInvite(roomId, inviteType, seatId, roomOwnerToken) {
+  const room = requireRoom(roomId);
+  assertRoomOwner(room, roomOwnerToken);
+  if (!['player', 'agent', 'spectator'].includes(inviteType)) throw new Error('invalid_invite_type');
+  const autoAssign = inviteType === 'player' && (seatId === undefined || seatId === null || seatId === 'auto');
+  const normalizedSeat = autoAssign ? null : Number(seatId ?? (inviteType === 'spectator' ? 0 : Number.NaN));
+  if (normalizedSeat !== null) validateSeat(normalizedSeat);
+  if (inviteType !== 'spectator') {
+    if (room.status !== 'waiting') throw new Error('game_already_started');
+    if (normalizedSeat !== null && occupiedSeats(room).includes(normalizedSeat)) throw new Error('seat_occupied');
+    if (normalizedSeat === null && occupiedSeats(room).length === 3) throw new Error('room_full');
+  }
+  const now = Date.now();
+  room.updatedAt = now;
+  pruneExpiredInvites(now);
+  const invite = {
+    token: crypto.randomUUID().replaceAll('-', ''),
+    inviteType,
+    roomId,
+    gameId: room.currentGameId,
+    seatId: normalizedSeat,
+    assignedSeat: null,
+    competitionId: room.competitionId,
+    createdAt: now,
+    expiresAt: now + INVITE_TTL_MS,
+    usedBy: null
+  };
+  invites.set(invite.token, invite);
+  markMetadataAuthoritative();
+  return publicInvite(invite);
+}
+
 export function resolveMatchInvite(token) {
   return publicInvite(requireInvite(token));
 }
@@ -362,7 +655,9 @@ export function joinAgentInvite(token, agentId, displayName, agentMetadata) {
   const invite = requireInvite(token, 'agent');
   const identity = normalizeInviteIdentity(agentId, 'anonymous');
   assertInviteIdentity(invite, identity);
-  const result = joinMatch(invite.gameId, invite.seatId, identity, undefined, displayName, { strategyMode: 'local', viaInvite: true, agentMetadata });
+  const result = invite.roomId
+    ? joinRoomAgent(invite.roomId, invite.seatId, identity, undefined, displayName, { strategyMode: 'local', viaInvite: true, agentMetadata })
+    : joinMatch(invite.gameId, invite.seatId, identity, undefined, displayName, { strategyMode: 'local', viaInvite: true, agentMetadata });
   if (!invite.usedBy) {
     invite.usedBy = identity;
     markMetadataAuthoritative();
@@ -374,10 +669,13 @@ export function joinPlayerInvite(token, playerId, displayName, seatSessionToken)
   const invite = requireInvite(token, 'player');
   const identity = normalizeInviteIdentity(playerId, 'h5-player-auto');
   assertInviteIdentity(invite, identity);
-  const game = requireMatch(invite.gameId);
-  const targetSeat = invite.assignedSeat ?? invite.seatId ?? [0, 1, 2].find((seatId) => !occupiedSeats(game).includes(seatId));
+  const target = invite.roomId ? requireRoom(invite.roomId) : requireMatch(invite.gameId);
+  const targetSeat = invite.assignedSeat ?? invite.seatId ?? [0, 1, 2].find((seatId) => !occupiedSeats(target).includes(seatId));
   if (targetSeat === undefined) throw new Error('room_full');
-  const result = joinPlayerMatch(invite.gameId, targetSeat, identity, displayName, { viaInvite: !game.playerSessions.has(targetSeat), seatSessionToken });
+  const options = { viaInvite: !target.playerSessions.has(targetSeat), seatSessionToken };
+  const result = invite.roomId
+    ? joinRoomPlayer(invite.roomId, targetSeat, identity, displayName, options)
+    : joinPlayerMatch(invite.gameId, targetSeat, identity, displayName, options);
   if (!invite.usedBy) {
     invite.usedBy = identity;
     markMetadataAuthoritative();
@@ -500,7 +798,7 @@ export function observeMatch(gameId, seatId, options = {}) {
     : [{ type: 'play', cards: 'select from your hand' }, ...(game.lastPlay ? [{ type: 'pass' }] : [])];
   const readySeats = [...game.ready].sort();
   const reviewContext = game.phase === 'over' && privateSeat !== null && game.agents.has(privateSeat) ? buildReviewContext(game, privateSeat) : null;
-  return { protocol: 'agent-game.v1', ...publicState(game, privateSeat, revealAll), accessMode: game.accessMode, view: revealAll ? 'global' : privateSeat === null ? 'public' : 'player', you: viewSeat, controlAuthorized, controlledSeat: controlAuthorized ? Number(controlSeat) : null, roleContext: roleContext(game, viewSeat), isYourTurn, allowedActions, agentSeats: Object.fromEntries(game.agents), playerSeats: Object.fromEntries(game.players), seatControllers: seatControllers(game), seatPresence: seatPresence(game), readySeats, allReady: readySeats.length === 3, settlement: structuredClone(game.settlement), competition: game.competitionId ? competitionStateForGame(game, viewSeat, revealAll) : null, strategy: privateSeat !== null && game.agentStrategies.has(privateSeat) ? structuredClone(game.agentStrategies.get(privateSeat)) : null, strategyAssignments: revealAll ? strategyAssignments(game) : {}, decisions: revealAll ? structuredClone(game.decisions) : [], reviews: revealAll ? reviews(game) : privateSeat !== null && game.reviews.has(privateSeat) ? { [privateSeat]: structuredClone(game.reviews.get(privateSeat)) } : {}, reviewStatus: reviewStatus(game), reviewContext, turnTimeoutMs: game.turnTimeoutMs, turnStartedAt: game.turnStartedAt, turnDeadlineAt: game.turnDeadlineAt, serverNow: Date.now() };
+  return { protocol: 'agent-game.v1', ...publicState(game, privateSeat, revealAll), roomId: game.roomId || null, accessMode: game.accessMode, view: revealAll ? 'global' : privateSeat === null ? 'public' : 'player', you: viewSeat, controlAuthorized, controlledSeat: controlAuthorized ? Number(controlSeat) : null, roleContext: roleContext(game, viewSeat), isYourTurn, allowedActions, agentSeats: Object.fromEntries(game.agents), playerSeats: Object.fromEntries(game.players), seatControllers: seatControllers(game), seatPresence: seatPresence(game), readySeats, allReady: readySeats.length === 3, settlement: structuredClone(game.settlement), competition: game.competitionId ? competitionStateForGame(game, viewSeat, revealAll) : null, strategy: privateSeat !== null && game.agentStrategies.has(privateSeat) ? structuredClone(game.agentStrategies.get(privateSeat)) : null, strategyAssignments: revealAll ? strategyAssignments(game) : {}, decisions: revealAll ? structuredClone(game.decisions) : [], reviews: revealAll ? reviews(game) : privateSeat !== null && game.reviews.has(privateSeat) ? { [privateSeat]: structuredClone(game.reviews.get(privateSeat)) } : {}, reviewStatus: reviewStatus(game), reviewContext, turnTimeoutMs: game.turnTimeoutMs, turnStartedAt: game.turnStartedAt, turnDeadlineAt: game.turnDeadlineAt, serverNow: Date.now() };
 }
 
 export function assertMatchRoomOwner(gameId, roomOwnerToken) {
@@ -613,6 +911,12 @@ export function submitCompetitionReview(competitionId, seatId, review) {
   if (expectedSeats.length && expectedSeats.every((seat) => competition.reviews.has(seat))) {
     competition.status = 'over';
     competition.completedAt = Date.now();
+    const room = competition.roomId ? rooms.get(competition.roomId) : null;
+    if (room) {
+      room.status = 'over';
+      room.completedAt = competition.completedAt;
+      room.updatedAt = competition.completedAt;
+    }
   }
   markMetadataAuthoritative();
   recordFrame(currentGame, { type: 'competition_review', seatId, review: record });
@@ -640,6 +944,7 @@ export function listAccessibleReplays(options = {}) {
 }
 
 export function tickMatches(now = Date.now()) {
+  for (const room of rooms.values()) maintainRoomPresence(room, now);
   for (const game of games.values()) {
     maintainPlayerPresence(game, now);
     advanceTimedOutTurn(game, now);
@@ -648,6 +953,13 @@ export function tickMatches(now = Date.now()) {
 
 export function nextMaintenanceAt(now = Date.now()) {
   const candidates = [];
+  for (const room of rooms.values()) {
+    if (room.status !== 'waiting' || room.currentGameId) continue;
+    for (const seatId of room.players.keys()) {
+      const lastSeenAt = Number(room.playerSessions.get(seatId)?.lastSeenAt) || 0;
+      candidates.push(lastSeenAt + WAITING_SEAT_RELEASE_MS);
+    }
+  }
   for (const game of games.values()) {
     const retention = game.phase === 'over' ? COMPLETED_GAME_RECOVERY_MS : ACTIVE_GAME_RECOVERY_MS;
     candidates.push(lastGameActivityAt(game) + retention);
@@ -705,6 +1017,7 @@ function replayState(game, now = Date.now()) {
   return {
     protocol: 'agent-game.v1',
     ...publicState(game, null, true),
+    roomId: game.roomId || null,
     accessMode: game.accessMode,
     view: 'global',
     you: null,
@@ -911,8 +1224,20 @@ function spectatorInviteMatches(gameId, token) {
   if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{32}$/.test(token)) return false;
   const invite = invites.get(token);
   const game = games.get(gameId);
-  const sameRoom = invite?.gameId === gameId || Boolean(invite?.competitionId && game?.competitionId === invite.competitionId);
+  const sameRoom = invite?.gameId === gameId
+    || Boolean(invite?.roomId && game?.roomId === invite.roomId)
+    || Boolean(invite?.competitionId && game?.competitionId === invite.competitionId);
   if (!invite || !sameRoom || invite.inviteType !== 'spectator') return false;
+  if (Date.now() < invite.expiresAt) return true;
+  invites.delete(token);
+  markMetadataAuthoritative();
+  return false;
+}
+
+function spectatorInviteMatchesRoom(roomId, token) {
+  if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{32}$/.test(token)) return false;
+  const invite = invites.get(token);
+  if (!invite || invite.roomId !== roomId || invite.inviteType !== 'spectator') return false;
   if (Date.now() < invite.expiresAt) return true;
   invites.delete(token);
   markMetadataAuthoritative();
@@ -1018,7 +1343,16 @@ function settleGame(game) {
     finalCardCounts: game.hands.map((cards) => cards.length),
     settledAt: Date.now()
   };
-  if (!game.competitionId) return;
+  if (!game.competitionId) {
+    const room = game.roomId ? rooms.get(game.roomId) : null;
+    if (room) {
+      room.status = 'over';
+      room.completedAt = game.settlement.settledAt;
+      room.updatedAt = game.settlement.settledAt;
+      markMetadataAuthoritative();
+    }
+    return;
+  }
   const competition = requireCompetition(game.competitionId);
   competition.scores = competition.scores.map((score, seatId) => score + scoring.scoreDelta[seatId]);
   competition.rounds.push({
@@ -1049,11 +1383,18 @@ function advanceCompetitionAfterRound(game) {
       competition.status = 'over';
       competition.completedAt = Date.now();
     } else competition.status = 'reviewing_competition';
+    const room = competition.roomId ? rooms.get(competition.roomId) : null;
+    if (room && competition.status === 'over') {
+      room.status = 'over';
+      room.completedAt = competition.completedAt;
+      room.updatedAt = competition.completedAt;
+    }
     markMetadataAuthoritative();
     return;
   }
   const nextRound = game.roundNumber + 1;
   const nextGame = createMatch({
+    roomId: competition.roomId,
     competitionId: competition.competitionId,
     roundNumber: nextRound,
     turnTimeoutMs: competition.turnTimeoutMs,
@@ -1075,6 +1416,12 @@ function advanceCompetitionAfterRound(game) {
   competition.currentGameId = nextGame.gameId;
   competition.gameIds.push(nextGame.gameId);
   competition.status = 'waiting';
+  const room = competition.roomId ? rooms.get(competition.roomId) : null;
+  if (room) {
+    room.ready = new Set();
+    room.status = 'waiting';
+    linkRoomToGame(room, nextGame);
+  }
   markMetadataAuthoritative();
 }
 
@@ -1082,6 +1429,7 @@ function competitionStateForGame(game, seatId = null, revealAll = false) {
   const competition = requireCompetition(game.competitionId);
   return {
     competitionId: competition.competitionId,
+    roomId: competition.roomId || game.roomId || null,
     totalRounds: competition.totalRounds,
     currentRound: competition.currentRound,
     currentGameId: competition.currentGameId,
@@ -1186,9 +1534,22 @@ function normalizeTotalRounds(value) {
   return rounds;
 }
 
+function normalizeRoomRounds(value) {
+  const rounds = Number(value ?? 1);
+  if (![1, 3, 5, 7].includes(rounds)) throw new Error('invalid_total_rounds');
+  return rounds;
+}
+
 function normalizeAccessMode(value) {
   const mode = value === undefined || value === null ? 'open' : String(value).trim();
   if (!ACCESS_MODES.has(mode)) throw new Error('invalid_access_mode');
+  return mode;
+}
+
+function normalizeRoomAccessMode(value) {
+  const mode = value === undefined || value === null ? 'open' : String(value).trim();
+  if (mode === 'invite_only') return 'private';
+  if (mode !== 'open' && mode !== 'private') throw new Error('invalid_access_mode');
   return mode;
 }
 
@@ -1235,6 +1596,7 @@ function sameMetadata(left, right) {
 }
 
 function hydrateGame(game) {
+  game.roomId ||= null;
   game.accessMode = normalizeAccessMode(game.accessMode);
   game.replayAccessToken = game.accessMode === 'open' ? null : normalizeReplayAccessToken(game.replayAccessToken) || createAccessToken();
   game.roomOwnerToken = normalizeAccessToken(game.roomOwnerToken) || createAccessToken();
@@ -1248,6 +1610,164 @@ function hydrateGame(game) {
     else game.playerSessions.get(seatId).managed = game.playerSessions.get(seatId).managed === true;
   }
   return game;
+}
+
+function hydrateRoom(room) {
+  room.totalRounds = normalizeRoomRounds(room.totalRounds);
+  room.accessMode = normalizeRoomAccessMode(room.accessMode);
+  room.allowedAgentIds = room.allowedAgentIds instanceof Set ? room.allowedAgentIds : normalizeIdentitySet(room.allowedAgentIds);
+  room.allowedPlayerIds = room.allowedPlayerIds instanceof Set ? room.allowedPlayerIds : normalizeIdentitySet(room.allowedPlayerIds);
+  room.replayAccessToken = room.accessMode === 'open' ? null : normalizeReplayAccessToken(room.replayAccessToken) || createAccessToken();
+  room.roomOwnerToken = normalizeAccessToken(room.roomOwnerToken) || createAccessToken();
+  room.agents = room.agents instanceof Map ? room.agents : new Map();
+  room.players = room.players instanceof Map ? room.players : new Map();
+  room.playerSessions = room.playerSessions instanceof Map ? room.playerSessions : new Map();
+  room.displayNames = room.displayNames instanceof Map ? room.displayNames : new Map();
+  room.agentMetadata = room.agentMetadata instanceof Map ? room.agentMetadata : new Map();
+  room.agentStrategies = room.agentStrategies instanceof Map ? room.agentStrategies : new Map();
+  room.localStrategySeats = room.localStrategySeats instanceof Set ? room.localStrategySeats : new Set();
+  room.ready = room.ready instanceof Set ? room.ready : new Set();
+  room.gameIds ||= [];
+  room.currentGameId ||= null;
+  room.competitionId ||= null;
+  room.status ||= room.currentGameId ? 'playing' : 'waiting';
+  room.updatedAt = Number(room.updatedAt) || Number(room.createdAt) || Date.now();
+  return room;
+}
+
+function roomSummary(room) {
+  return {
+    roomId: room.roomId,
+    totalRounds: room.totalRounds,
+    accessMode: room.accessMode,
+    status: room.status,
+    competitionId: room.competitionId,
+    currentGameId: room.currentGameId,
+    gameIds: [...room.gameIds],
+    createdAt: room.createdAt,
+    completedAt: room.completedAt
+  };
+}
+
+function withRoomAccess(room, result) {
+  return { ...result, ...(room.replayAccessToken ? { replayAccessToken: room.replayAccessToken } : {}) };
+}
+
+function withRoomCredentials(room, result) {
+  return { ...withRoomAccess(room, result), roomOwnerToken: room.roomOwnerToken };
+}
+
+function assertRoomWaitingOrExisting(room, existing) {
+  if (room.status !== 'waiting' && !existing) throw new Error('game_already_started');
+}
+
+function touchAuthorizedRoomPlayer(room, seatId, token) {
+  const normalizedSeat = Number(seatId);
+  if (![0, 1, 2].includes(normalizedSeat) || !room.players.has(normalizedSeat)) return false;
+  const session = room.playerSessions.get(normalizedSeat);
+  if (!session || session.token !== normalizeAccessToken(token)) return false;
+  session.lastSeenAt = Date.now();
+  session.managed = false;
+  return true;
+}
+
+function maintainRoomPresence(room, now = Date.now()) {
+  if (room.status !== 'waiting') return;
+  for (const seatId of [...room.players.keys()]) {
+    const session = room.playerSessions.get(seatId);
+    if (!session || now - Number(session.lastSeenAt || 0) >= WAITING_SEAT_RELEASE_MS) releaseRoomPlayerSeat(room, seatId);
+  }
+}
+
+function releaseRoomPlayerSeat(room, seatId) {
+  room.players.delete(seatId);
+  room.playerSessions.delete(seatId);
+  room.displayNames.delete(seatId);
+  room.ready.delete(seatId);
+  room.updatedAt = Date.now();
+  markMetadataAuthoritative();
+}
+
+function beginRoomMatch(room) {
+  let game;
+  if (room.totalRounds === 1) {
+    game = createMatch({
+      roomId: room.roomId,
+      accessMode: room.accessMode,
+      allowedAgentIds: [...room.allowedAgentIds],
+      allowedPlayerIds: [...room.allowedPlayerIds],
+      replayAccessToken: room.replayAccessToken,
+      roomOwnerToken: room.roomOwnerToken,
+      turnTimeoutMs: room.turnTimeoutMs,
+      sourceGameId: room.sourceGameId,
+      presetDeal: room.presetDeal
+    });
+  } else {
+    const competition = createCompetition({
+      roomId: room.roomId,
+      totalRounds: room.totalRounds,
+      accessMode: room.accessMode,
+      allowedAgentIds: [...room.allowedAgentIds],
+      allowedPlayerIds: [...room.allowedPlayerIds],
+      replayAccessToken: room.replayAccessToken,
+      roomOwnerToken: room.roomOwnerToken,
+      turnTimeoutMs: room.turnTimeoutMs
+    });
+    room.competitionId = competition.competitionId;
+    game = requireMatch(competition.currentGameId);
+  }
+  linkRoomToGame(room, game);
+  startLinkedRoomGame(room, game);
+}
+
+function startLinkedRoomGame(room, game) {
+  startGame(game, game.presetDeal);
+  if (game.competitionId) requireCompetition(game.competitionId).status = 'playing';
+  resetTurnClock(game);
+  updateReplayParticipants(game.gameId, participants(game));
+  recordFrame(game, { type: 'started', seatId: null });
+  room.status = 'playing';
+  room.updatedAt = Date.now();
+}
+
+function linkRoomToGame(room, game) {
+  game.roomId = room.roomId;
+  game.accessMode = room.accessMode;
+  game.replayAccessToken = room.replayAccessToken;
+  game.roomOwnerToken = room.roomOwnerToken;
+  game.agents = new Map(room.agents);
+  game.players = new Map(room.players);
+  game.playerSessions = new Map([...room.playerSessions].map(([seatId, session]) => [seatId, structuredClone(session)]));
+  game.displayNames = new Map(room.displayNames);
+  game.agentMetadata = new Map([...room.agentMetadata].map(([seatId, metadata]) => [seatId, structuredClone(metadata)]));
+  game.agentStrategies = new Map([...room.agentStrategies].map(([seatId, strategy]) => [seatId, structuredClone(strategy)]));
+  game.localStrategySeats = new Set(room.localStrategySeats);
+  game.ready = new Set(room.ready);
+  room.agents = game.agents;
+  room.players = game.players;
+  room.playerSessions = game.playerSessions;
+  room.displayNames = game.displayNames;
+  room.agentMetadata = game.agentMetadata;
+  room.agentStrategies = game.agentStrategies;
+  room.localStrategySeats = game.localStrategySeats;
+  room.ready = game.ready;
+  room.currentGameId = game.gameId;
+  if (!room.gameIds.includes(game.gameId)) room.gameIds.push(game.gameId);
+  bindReplayAccessToken(game.gameId, room.replayAccessToken);
+}
+
+function adoptCurrentGameState(room, game) {
+  game.roomId = room.roomId;
+  room.agents = game.agents;
+  room.players = game.players;
+  room.playerSessions = game.playerSessions;
+  room.displayNames = game.displayNames;
+  room.agentMetadata = game.agentMetadata;
+  room.agentStrategies = game.agentStrategies;
+  room.localStrategySeats = game.localStrategySeats;
+  room.ready = game.ready;
+  room.currentGameId = game.gameId;
+  if (!room.gameIds.includes(game.gameId)) room.gameIds.push(game.gameId);
 }
 
 function withReplayAccess(game, result) {
@@ -1346,6 +1866,12 @@ function requireMatch(gameId) {
   return game;
 }
 
+function requireRoom(roomId) {
+  const room = rooms.get(roomId);
+  if (!room) throw new Error('room_not_found');
+  return room;
+}
+
 function requireInvite(token, expectedType = null) {
   if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{32}$/.test(token)) throw new Error('invite_not_found');
   const invite = invites.get(token);
@@ -1356,7 +1882,8 @@ function requireInvite(token, expectedType = null) {
     throw new Error('invite_expired');
   }
   if (expectedType && invite.inviteType !== expectedType) throw new Error('invite_type_mismatch');
-  requireMatch(invite.gameId);
+  if (invite.roomId) requireRoom(invite.roomId);
+  else requireMatch(invite.gameId);
   return invite;
 }
 
@@ -1370,17 +1897,19 @@ function pruneExpiredInvites(now) {
 }
 
 function publicInvite(invite) {
-  const game = requireMatch(invite.gameId);
+  const game = invite.roomId ? requireRoom(invite.roomId) : requireMatch(invite.gameId);
   const resolvedSeat = invite.assignedSeat ?? invite.seatId;
   const occupied = invite.inviteType === 'spectator' || resolvedSeat === null
     ? false
     : occupiedSeats(game).includes(resolvedSeat);
   const roomHasSpace = occupiedSeats(game).length < 3;
   const autoAssign = invite.inviteType === 'player' && invite.seatId === null;
+  const joinable = invite.roomId ? game.status === 'waiting' : game.phase === 'waiting';
   return {
     protocol: 'agent-game.invite.v1',
     token: invite.token,
     inviteType: invite.inviteType,
+    roomId: invite.roomId || game.roomId || null,
     gameId: invite.gameId,
     seatId: resolvedSeat,
     seatMode: autoAssign ? 'auto' : 'fixed',
@@ -1388,7 +1917,7 @@ function publicInvite(invite) {
     view: invite.inviteType === 'spectator' ? 'global' : 'player',
     expiresAt: invite.expiresAt,
     singleUse: invite.inviteType !== 'spectator',
-    available: invite.inviteType === 'spectator' || (!invite.usedBy && (autoAssign ? roomHasSpace : !occupied))
+    available: invite.inviteType === 'spectator' || (joinable && !invite.usedBy && (autoAssign ? roomHasSpace : !occupied))
   };
 }
 

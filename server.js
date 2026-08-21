@@ -2,7 +2,7 @@ import http from 'node:http';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
-import { assertMatchRoomOwner, createCompetition, createMatch, createMatchInvite, createRematch, getAuthorizedReplay, getMatch, getMatchStrategies, getStrategies, joinAgentInvite, joinAvailablePlayerMatch, joinMatch, joinPlayerInvite, joinPlayerMatch, listAccessibleReplays, observeCompetition, observeMatch, reconnectPlayerMatch, removeDisconnectedPlayer, resolveMatchInvite, startMatch, submitCompetitionReview, submitMatchAction, submitMatchReview, tickMatches } from './game/store.js';
+import { assertMatchRoomOwner, assertRoomOwnerById, createCompetition, createMatch, createMatchInvite, createRematch, createRematchRoom, createRoom, createRoomInvite, getAuthorizedReplay, getMatch, getMatchStrategies, getRoom, getRoomStrategies, getStrategies, joinAgentInvite, joinAvailablePlayerMatch, joinAvailableRoomPlayer, joinMatch, joinPlayerInvite, joinPlayerMatch, joinRoomAgent, listAccessibleReplays, observeCompetition, observeMatch, observeRoom, readyRoom, reconnectPlayerMatch, reconnectRoomPlayer, removeDisconnectedPlayer, removeDisconnectedRoomPlayer, resolveMatchInvite, startMatch, submitCompetitionReview, submitMatchAction, submitMatchReview, submitRoomAction, tickMatches } from './game/store.js';
 import { assetsDirectory } from './game/runtime-paths.js';
 import { handleMcpMessage } from './server/mcp.js';
 
@@ -44,6 +44,36 @@ const handleRequest = async (req, res) => {
     }
     if (req.method === 'GET' && url.pathname === '/agent/v1/strategies') return json(res, 200, { protocol:'agent-game.v1', ...getStrategies() });
     if (req.method === 'GET' && url.pathname === '/api/replays') return json(res, 200, listAccessibleReplays({ limit:url.searchParams.get('limit'), offset:url.searchParams.get('offset'), status:url.searchParams.get('status'), replayAccessToken:replayAccess(req) }));
+    if (req.method === 'POST' && (url.pathname === '/api/rooms' || url.pathname === '/agent/v1/rooms')) return json(res, 201, createRoom(await body(req)));
+    const agentRoom = url.pathname.match(/^\/agent\/v1\/rooms\/([^/]+)\/(join|observe|ready|actions|review)$/);
+    if (agentRoom) {
+      const data = req.method === 'POST' ? await body(req) : {};
+      const seatId = Number(req.method === 'GET' ? url.searchParams.get('seatId') : data.seatId);
+      try {
+        if (agentRoom[2] === 'join' && req.method === 'POST') return json(res, 200, joinRoomAgent(agentRoom[1], seatId, String(data.agentId || 'anonymous'), data.strategyId, data.displayName, { strategyMode:data.strategyMode, agentMetadata:data.agentMetadata }));
+        if (agentRoom[2] === 'observe' && req.method === 'GET') return json(res, 200, observeRoom(agentRoom[1], seatId));
+        if (agentRoom[2] === 'ready' && req.method === 'POST') return json(res, 200, readyRoom(agentRoom[1], seatId));
+        if (agentRoom[2] === 'actions' && req.method === 'POST') return json(res, 200, submitRoomAction(agentRoom[1], data.gameId, seatId, data.action, data.seq, {source:'agent',decision:data.decision}));
+        if (agentRoom[2] === 'review' && req.method === 'POST') return json(res, 200, submitMatchReview(getRoom(agentRoom[1])?.currentGameId, seatId, data.review));
+      } catch (error) { return json(res, error.message === 'room_not_found' ? 404 : 400, {protocol:'agent-game.v1',ok:false,error:error.message}); }
+    }
+    const roomReconnect = url.pathname.match(/^\/api\/rooms\/([^/]+)\/reconnect$/);
+    if (req.method === 'POST' && roomReconnect) { const data = await body(req); try { return json(res, 200, reconnectRoomPlayer(roomReconnect[1], data.reconnectCode)); } catch (error) { return json(res, error.message === 'room_not_found' ? 404 : 400, {ok:false,error:error.message}); } }
+    const roomPlayer = url.pathname.match(/^\/api\/rooms\/([^/]+)\/players\/([0-2])$/);
+    if (req.method === 'DELETE' && roomPlayer) { try { return json(res, 200, removeDisconnectedRoomPlayer(roomPlayer[1], Number(roomPlayer[2]), roomOwner(req))); } catch (error) { return json(res, error.message === 'room_owner_required' ? 403 : error.message === 'room_not_found' ? 404 : 400, {ok:false,error:error.message}); } }
+    const browserRoom = url.pathname.match(/^\/api\/rooms\/([^/]+)(?:\/(state|strategies|join|ready|actions|invites))?$/);
+    if (browserRoom) {
+      if (!getRoom(browserRoom[1])) return json(res, 404, {error:'room_not_found'});
+      try {
+        if (req.method === 'GET' && browserRoom[2] === 'state') return json(res, 200, observeRoom(browserRoom[1], Number(url.searchParams.get('seat')), {requireAuthorization:true,revealAll:url.searchParams.get('view') === 'global',seatSessionToken:seatSession(req),controlSeatId:seatSessionSeat(req),roomOwnerToken:roomOwner(req),inviteToken:gameInvite(req)}));
+        if (req.method === 'GET' && browserRoom[2] === 'strategies') { if (url.searchParams.get('view') !== 'global') return json(res, 403, {error:'global_view_required'}); assertRoomOwnerById(browserRoom[1], roomOwner(req)); return json(res, 200, getRoomStrategies(browserRoom[1])); }
+        if (req.method === 'POST' && browserRoom[2] === 'join') { const data = await body(req); return json(res, 200, joinAvailableRoomPlayer(browserRoom[1], String(data.playerId || 'h5-player-auto'), data.displayName, {seatSessionToken:seatSession(req)})); }
+        if (req.method === 'POST' && browserRoom[2] === 'ready') { const data = await body(req); return json(res, 200, readyRoom(browserRoom[1], Number(data.seatId), {seatSessionToken:seatSession(req)})); }
+        if (req.method === 'POST' && browserRoom[2] === 'actions') { const data = await body(req); const state = submitRoomAction(browserRoom[1], data.gameId, Number(data.seatId), data.action, data.seq, {source:'player',seatSessionToken:seatSession(req)}); return json(res, 200, {ok:true,gameId:state.gameId,seq:state.seq}); }
+        if (req.method === 'POST' && browserRoom[2] === 'invites') { const data = await body(req); return json(res, 201, createRoomInvite(browserRoom[1], data.inviteType, data.seatId, roomOwner(req))); }
+      } catch (error) { return json(res, ['room_owner_required','access_denied'].includes(error.message) ? 403 : 400, {ok:false,error:error.message}); }
+      return json(res, 405, {error:'method_not_allowed'});
+    }
     const browserInvite = url.pathname.match(/^\/api\/invites\/([^/]+)(?:\/(join))?$/);
     if (browserInvite) {
       try {
@@ -75,6 +105,8 @@ const handleRequest = async (req, res) => {
     }
     const replayMatch = url.pathname.match(/^\/api\/replays\/([^/]+)$/);
     if (req.method === 'GET' && replayMatch) { try { return json(res, 200, getAuthorizedReplay(replayMatch[1], replayAccess(req))); } catch (error) { return json(res, error.message === 'replay_not_found' ? 404 : error.message === 'replay_access_denied' ? 403 : 400, { error: error.message }); } }
+    const replayRoomRematch = url.pathname.match(/^\/api\/replays\/([^/]+)\/rematch-room$/);
+    if (req.method === 'POST' && replayRoomRematch) { try { await body(req); return json(res, 201, createRematchRoom(replayRoomRematch[1], replayAccess(req))); } catch (error) { return json(res, error.message === 'replay_not_found' ? 404 : error.message === 'replay_access_denied' ? 403 : 400, {error:error.message}); } }
     const replayRematch = url.pathname.match(/^\/api\/replays\/([^/]+)\/rematch$/);
     if (req.method === 'POST' && replayRematch) {
       try { await body(req); const game = createRematch(replayRematch[1], replayAccess(req)); return json(res, 201, { protocol:'agent-game.v1', gameId:game.gameId, sourceGameId:game.sourceGameId, accessMode:game.accessMode, replayAccessToken:game.replayAccessToken || undefined, roomOwnerToken:game.roomOwnerToken, turnTimeoutMs:game.turnTimeoutMs }); }

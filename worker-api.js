@@ -1,9 +1,9 @@
 import {
-  assertMatchRoomOwner, createCompetition, createMatch, createMatchInvite, createRematch, exportStoreState,
-  getAuthorizedReplay, getMatch, getMatchStrategies, getStrategies, importStoreState,
-  joinAgentInvite, joinAvailablePlayerMatch, joinMatch, joinPlayerInvite, joinPlayerMatch, observeCompetition,
-  listAccessibleReplays, observeMatch, reconnectPlayerMatch, removeDisconnectedPlayer, resolveMatchInvite, startMatch, submitCompetitionReview,
-  submitMatchAction, submitMatchReview
+  assertMatchRoomOwner, assertRoomOwnerById, createCompetition, createMatch, createMatchInvite, createRematch, createRematchRoom, createRoom, createRoomInvite, exportStoreState,
+  getAuthorizedReplay, getMatch, getMatchStrategies, getRoom, getRoomStrategies, getStrategies, importStoreState,
+  joinAgentInvite, joinAvailablePlayerMatch, joinAvailableRoomPlayer, joinMatch, joinPlayerInvite, joinPlayerMatch, joinRoomAgent, observeCompetition,
+  listAccessibleReplays, observeMatch, observeRoom, readyRoom, reconnectPlayerMatch, reconnectRoomPlayer, removeDisconnectedPlayer, removeDisconnectedRoomPlayer,
+  resolveMatchInvite, startMatch, submitCompetitionReview, submitMatchAction, submitMatchReview, submitRoomAction
 } from './game/store.js';
 import { getStrategy } from './game/strategy-runtime.js';
 import { handleMcpMessage } from './server/mcp.js';
@@ -33,6 +33,39 @@ export async function handleWorkerRequest(request) {
     }
     if (request.method === 'GET' && url.pathname === '/agent/v1/strategies') return json({ protocol: 'agent-game.v1', ...getStrategies() });
     if (request.method === 'GET' && url.pathname === '/api/replays') return json(listAccessibleReplays({ limit: url.searchParams.get('limit'), offset: url.searchParams.get('offset'), status: url.searchParams.get('status'), replayAccessToken: replayAccess(request) }));
+
+    if (request.method === 'POST' && (url.pathname === '/api/rooms' || url.pathname === '/agent/v1/rooms')) return json(createRoom(await body(request)), 201);
+    const agentRoom = url.pathname.match(/^\/agent\/v1\/rooms\/([^/]+)\/(join|observe|ready|actions|review)$/);
+    if (agentRoom) {
+      const data = request.method === 'POST' ? await body(request) : {};
+      const seatId = Number(request.method === 'GET' ? url.searchParams.get('seatId') : data.seatId);
+      try {
+        if (agentRoom[2] === 'join' && request.method === 'POST') return json(joinRoomAgent(agentRoom[1], seatId, String(data.agentId || 'anonymous'), data.strategyId, data.displayName, { strategyMode:data.strategyMode, agentMetadata:data.agentMetadata }));
+        if (agentRoom[2] === 'observe' && request.method === 'GET') return json(observeRoom(agentRoom[1], seatId));
+        if (agentRoom[2] === 'ready' && request.method === 'POST') return json(readyRoom(agentRoom[1], seatId));
+        if (agentRoom[2] === 'actions' && request.method === 'POST') return json(submitRoomAction(agentRoom[1], data.gameId, seatId, data.action, data.seq, { source:'agent', decision:data.decision }));
+        if (agentRoom[2] === 'review' && request.method === 'POST') { const room = getRoom(agentRoom[1]); return json(submitMatchReview(room?.currentGameId, seatId, data.review)); }
+      } catch (error) { return json({ protocol:'agent-game.v1', ok:false, error:error.message }, error.message === 'room_not_found' ? 404 : 400); }
+    }
+
+    const roomReconnect = url.pathname.match(/^\/api\/rooms\/([^/]+)\/reconnect$/);
+    if (request.method === 'POST' && roomReconnect) { const data = await body(request); try { return json(reconnectRoomPlayer(roomReconnect[1], data.reconnectCode)); } catch (error) { return json({ok:false,error:error.message}, error.message === 'room_not_found' ? 404 : 400); } }
+    const roomPlayer = url.pathname.match(/^\/api\/rooms\/([^/]+)\/players\/([0-2])$/);
+    if (request.method === 'DELETE' && roomPlayer) { try { return json(removeDisconnectedRoomPlayer(roomPlayer[1], Number(roomPlayer[2]), roomOwner(request))); } catch (error) { return json({ok:false,error:error.message}, error.message === 'room_owner_required' ? 403 : error.message === 'room_not_found' ? 404 : 400); } }
+    const browserRoom = url.pathname.match(/^\/api\/rooms\/([^/]+)(?:\/(state|strategies|join|ready|actions|invites))?$/);
+    if (browserRoom) {
+      const room = getRoom(browserRoom[1]);
+      if (!room) return json({ error:'room_not_found' }, 404);
+      try {
+        if (request.method === 'GET' && browserRoom[2] === 'state') return json(observeRoom(browserRoom[1], Number(url.searchParams.get('seat')), { requireAuthorization:true, revealAll:url.searchParams.get('view') === 'global', seatSessionToken:seatSession(request), controlSeatId:seatSessionSeat(request), roomOwnerToken:roomOwner(request), inviteToken:gameInvite(request) }));
+        if (request.method === 'GET' && browserRoom[2] === 'strategies') { if (url.searchParams.get('view') !== 'global') return json({error:'global_view_required'}, 403); assertRoomOwnerById(browserRoom[1], roomOwner(request)); return json(getRoomStrategies(browserRoom[1])); }
+        if (request.method === 'POST' && browserRoom[2] === 'join') { const data = await body(request); return json(joinAvailableRoomPlayer(browserRoom[1], String(data.playerId || 'h5-player-auto'), data.displayName, { seatSessionToken:seatSession(request) })); }
+        if (request.method === 'POST' && browserRoom[2] === 'ready') { const data = await body(request); return json(readyRoom(browserRoom[1], Number(data.seatId), { seatSessionToken:seatSession(request) })); }
+        if (request.method === 'POST' && browserRoom[2] === 'actions') { const data = await body(request); const state = submitRoomAction(browserRoom[1], data.gameId, Number(data.seatId), data.action, data.seq, { source:'player', seatSessionToken:seatSession(request) }); return json({ok:true, gameId:state.gameId, seq:state.seq}); }
+        if (request.method === 'POST' && browserRoom[2] === 'invites') { const data = await body(request); return json(createRoomInvite(browserRoom[1], data.inviteType, data.seatId, roomOwner(request)), 201); }
+      } catch (error) { return json({ok:false,error:error.message}, ['room_owner_required','access_denied'].includes(error.message) ? 403 : 400); }
+      return json({ error:'method_not_allowed' }, 405);
+    }
 
     const browserInvite = url.pathname.match(/^\/api\/invites\/([^/]+)(?:\/(join))?$/);
     if (browserInvite) {
@@ -66,6 +99,8 @@ export async function handleWorkerRequest(request) {
     }
     const replayMatch = url.pathname.match(/^\/api\/replays\/([^/]+)$/);
     if (request.method === 'GET' && replayMatch) { try { return json(getAuthorizedReplay(replayMatch[1], replayAccess(request))); } catch (error) { return json({ error: error.message }, error.message === 'replay_not_found' ? 404 : error.message === 'replay_access_denied' ? 403 : 400); } }
+    const replayRoomRematch = url.pathname.match(/^\/api\/replays\/([^/]+)\/rematch-room$/);
+    if (request.method === 'POST' && replayRoomRematch) { try { await body(request); return json(createRematchRoom(replayRoomRematch[1], replayAccess(request)), 201); } catch (error) { return json({error:error.message}, error.message === 'replay_not_found' ? 404 : error.message === 'replay_access_denied' ? 403 : 400); } }
     const replayRematch = url.pathname.match(/^\/api\/replays\/([^/]+)\/rematch$/);
     if (request.method === 'POST' && replayRematch) { try { await body(request); const game = createRematch(replayRematch[1], replayAccess(request)); return json({ protocol: 'agent-game.v1', gameId: game.gameId, sourceGameId: game.sourceGameId, accessMode: game.accessMode, replayAccessToken: game.replayAccessToken || undefined, roomOwnerToken: game.roomOwnerToken, turnTimeoutMs: game.turnTimeoutMs }, 201); } catch (error) { return json({ error: error.message }, error.message === 'replay_not_found' ? 404 : error.message === 'replay_access_denied' ? 403 : 400); } }
     if (request.method === 'POST' && (url.pathname === '/api/games' || url.pathname === '/agent/v1/games')) { const game = createMatch(await body(request)); return json({ protocol: 'agent-game.v1', gameId: game.gameId, accessMode: game.accessMode, replayAccessToken: game.replayAccessToken || undefined, roomOwnerToken: game.roomOwnerToken, turnTimeoutMs: game.turnTimeoutMs }, 201); }

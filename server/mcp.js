@@ -3,14 +3,21 @@ import {
   createMatch,
   createMatchInvite,
   createRematch,
+  createRematchRoom,
+  createRoom,
   getStrategies,
+  getRoom,
   joinAgentInvite,
   joinMatch,
+  joinRoomAgent,
   observeCompetition,
   observeMatch,
+  observeRoom,
+  readyRoom,
   submitCompetitionReview,
   submitMatchAction,
   submitMatchReview,
+  submitRoomAction,
   startMatch
 } from '../game/store.js';
 
@@ -19,6 +26,11 @@ const accessProperties = {
   accessMode: { type: 'string', enum: ['open', 'invite_only', 'private'] },
   allowedAgentIds: { type: 'array', maxItems: 100, items: { type: 'string', minLength: 1, maxLength: 120 } },
   allowedPlayerIds: { type: 'array', maxItems: 100, items: { type: 'string', minLength: 1, maxLength: 120 } }
+};
+const roomAccessProperties = {
+  accessMode: { type: 'string', enum: ['open', 'private'] },
+  allowedAgentIds: accessProperties.allowedAgentIds,
+  allowedPlayerIds: accessProperties.allowedPlayerIds
 };
 const agentMetadataSchema = {
   type: 'object',
@@ -36,6 +48,37 @@ const agentMetadataSchema = {
 
 export const MCP_TOOLS = [
   tool('list_strategies', 'List optional server-catalog strategies. Local strategy files remain with the Agent.', {}),
+  tool('create_room', 'Create a stable room. No gameId exists until all three joined seats are ready.', {
+    properties: { totalRounds: { type: 'integer', enum: [1, 3, 5, 7] }, ...roomAccessProperties }, additionalProperties: false
+  }),
+  tool('create_rematch_room', 'Create a stable room that will use the initial deal from a completed game.', {
+    properties: { sourceGameId: { type: 'string' }, replayAccessToken: { type: 'string' } }, required: ['sourceGameId'], additionalProperties: false
+  }),
+  tool('join_room', 'Claim one Agent seat in a room before its first game starts.', {
+    properties: {
+      roomId: { type: 'string' }, seatId: { type: 'integer', minimum: 0, maximum: 2 },
+      agentId: { type: 'string' }, displayName: { type: 'string', minLength: 1, maxLength: 40 },
+      strategyMode: { type: 'string', enum: ['local', 'server'] }, strategyId: { type: 'string' }, agentMetadata: agentMetadataSchema
+    }, required: ['roomId', 'seatId', 'agentId'], additionalProperties: false
+  }),
+  tool('observe_room', 'Observe the room and its current game. currentGameId changes between rounds while roomId stays stable.', {
+    properties: { roomId: { type: 'string' }, seatId: { type: 'integer', minimum: 0, maximum: 2 } },
+    required: ['roomId', 'seatId'], additionalProperties: false
+  }),
+  tool('ready_room', 'Mark one joined room seat ready. The third ready seat creates and starts the current game.', {
+    properties: { roomId: { type: 'string' }, seatId: { type: 'integer', minimum: 0, maximum: 2 } },
+    required: ['roomId', 'seatId'], additionalProperties: false
+  }),
+  tool('submit_room_action', 'Submit to the current room game. gameId and seq protect against stale actions across rounds.', {
+    properties: {
+      roomId: { type: 'string' }, gameId: { type: 'string' }, seatId: { type: 'integer', minimum: 0, maximum: 2 }, seq: { type: 'integer' },
+      action: { type: 'object' }, decision: { type: 'object' }
+    }, required: ['roomId', 'gameId', 'seatId', 'seq', 'action'], additionalProperties: false
+  }),
+  tool('submit_room_review', 'Submit a review for the room current game.', {
+    properties: { roomId: { type: 'string' }, seatId: { type: 'integer', minimum: 0, maximum: 2 }, review: { type: 'object' } },
+    required: ['roomId', 'seatId', 'review'], additionalProperties: false
+  }),
   tool('create_game', 'Create a random Dou Dizhu game. accessMode defaults to open.', { properties: accessProperties, additionalProperties: false }),
   tool('create_rematch', 'Create a new game using the initial deal from a completed game.', {
     properties: { sourceGameId: { type: 'string' }, replayAccessToken: { type: 'string' } }, required: ['sourceGameId']
@@ -117,6 +160,17 @@ export async function handleMcpMessage(message) {
 async function callTool(name, args) {
   switch (name) {
     case 'list_strategies': return text({ protocol: 'agent-game.v1', ...getStrategies() });
+    case 'create_room': return text(createRoom(args));
+    case 'create_rematch_room': return text(createRematchRoom(args.sourceGameId, args.replayAccessToken));
+    case 'join_room': {
+      const strategyMode = args.strategyMode || 'local';
+      const strategyId = strategyMode === 'server' ? args.strategyId : undefined;
+      return text(joinRoomAgent(args.roomId, args.seatId, args.agentId, strategyId, args.displayName, { strategyMode, agentMetadata:args.agentMetadata }));
+    }
+    case 'observe_room': return text(observeRoom(args.roomId, args.seatId));
+    case 'ready_room': return text(readyRoom(args.roomId, args.seatId));
+    case 'submit_room_action': return text(submitRoomAction(args.roomId, args.gameId, args.seatId, args.action, args.seq, {source:'agent',decision:args.decision}));
+    case 'submit_room_review': return text(submitMatchReview(getRoom(args.roomId)?.currentGameId, args.seatId, args.review));
     case 'create_game': {
       const game = createMatch(args);
       return text({ protocol: 'agent-game.v1', gameId: game.gameId, accessMode: game.accessMode, replayAccessToken: game.replayAccessToken || undefined, roomOwnerToken: game.roomOwnerToken, turnTimeoutMs: game.turnTimeoutMs });
