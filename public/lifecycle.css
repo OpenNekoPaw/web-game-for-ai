@@ -88,6 +88,9 @@
   transition: background-color .18s ease, border-color .18s ease, box-shadow .18s ease;
 }
 
+.avatar.participant-trigger { cursor: help; }
+.avatar.participant-trigger:focus-visible { outline: 3px solid var(--gold); outline-offset: 4px; }
+
 .avatar.role-neutral {
   border-color: #e4f1ff;
   background: #6d62bc;
@@ -206,6 +209,22 @@
 .agent-connect-note { display: block; margin: 12px 2px 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
 
 .decision-panel[hidden] { display: none; }
+.participant-popover {
+  position: fixed;
+  z-index: 40;
+  display: flex;
+  width: min(350px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow: hidden;
+  border: 1px solid #d0e6ff77;
+  border-radius: 13px;
+  background: #123f7cf7;
+  color: #fff;
+  text-shadow: none;
+  box-shadow: 0 14px 36px #061b3baa;
+}
+.participant-popover[hidden] { display: none; }
+.participant-popover .participant-content { width: 100%; overflow-y: auto; }
 .decision-panel header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid #d0e6ff33; }
 .decision-panel header button { border: 0; background: transparent; color: #fff; font-size: 24px; cursor: pointer; }
 .strategy-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 10px; border-bottom: 1px solid #d0e6ff22; }
@@ -215,6 +234,18 @@
 .strategy-heading { margin: 2px 2px 4px; color: #fff; font-size: 17px; overflow-wrap: anywhere; }
 .strategy-context { display: inline-block; margin: 4px 2px 6px; padding: 3px 7px; border-radius: 4px; background: var(--gold); color: #5b3b04; font-size: 11px; font-weight: 800; }
 .strategy-metadata { display: block; margin: 0 2px 14px; color: var(--muted); overflow-wrap: anywhere; }
+.participant-hero { display: flex; align-items: center; gap: 12px; padding: 4px 2px 16px; border-bottom: 1px solid #d0e6ff22; }
+.participant-hero-avatar { display: grid; flex: none; place-items: center; width: 52px; height: 52px; border: 3px solid #e4f1ff; border-radius: 50%; background: #6d62bc; font-size: 20px; font-weight: 900; }
+.participant-hero h2 { margin: 0; color: #fff; font-size: 18px; overflow-wrap: anywhere; }
+.participant-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.participant-badge { padding: 3px 7px; border: 1px solid #d0e6ff44; border-radius: 999px; background: #082b5d; color: #dcecff; font-size: 10px; font-weight: 800; }
+.participant-badge.declared { border-color: #ffd35b66; color: #ffe49b; }
+.participant-description { margin: 14px 2px 4px; color: #eef7ff; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.participant-fields { margin: 14px 0 0; }
+.participant-field { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 10px; padding: 9px 2px; border-top: 1px solid #d0e6ff1f; }
+.participant-field dt { color: var(--muted); font-size: 12px; }
+.participant-field dd { margin: 0; color: #fff; font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+.participant-note { display: block; margin: 16px 2px 2px; color: var(--muted); font-size: 11px; line-height: 1.55; }
 .strategy-document { padding-top: 2px; border-top: 1px solid #d0e6ff22; }
 .strategy-document h2, .strategy-document h3, .strategy-document h4 { margin: 16px 2px 7px; color: #fff; letter-spacing: 0; }
 .strategy-document h2 { font-size: 18px; }
@@ -246,6 +277,22 @@
   .table.decisions-open > .seat,
   .table.decisions-open > .middle { visibility: hidden; }
   .decision-panel { inset: 10px; width: auto; max-height: calc(100% - 20px); border-radius: 12px; background: #123f7c; }
+}
+
+@media (orientation: landscape) and (max-height: 520px) {
+  .game-page { min-height: 0; }
+  .game-header { height: 56px; padding: 0 16px; }
+  .game-header h1 { font-size: 20px; }
+  .table { inset: 56px 0 0; }
+  .table::before { display: none; }
+  .seat-left, .seat-right { top: 43%; }
+  .seat-self { bottom: 30px; width: 76%; }
+  .seat-self .player { bottom: 0; }
+  .hand { height: 82px; padding-left: 108px; }
+  .actions { bottom: 4px; }
+  .actions button { min-width: 82px; padding: 8px 14px; }
+  .bottom { top: 8px; }
+  .game-lifecycle { padding: 14px 18px; }
 }
 
 @media(max-width:760px) {

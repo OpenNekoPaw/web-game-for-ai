@@ -34,6 +34,8 @@ let selectedRounds = 1;
 let selectedAgentType = null;
 let agentGuide = null;
 let agentGuideLoading = false;
+let participantSeat = null;
+let participantHideTimer = null;
 
 const $ = (id) => document.getElementById(id);
 async function readJson(response) {
@@ -186,6 +188,7 @@ function restoreActiveInvite(targetId = activeSessionId()) {
 function setAgentPanel(open, type = selectedAgentType) {
   setAgentTypeMenu(false);
   if (open) {
+    hideParticipantPanel();
     $('strategy-panel').hidden = true;
     $('decision-panel').hidden = true;
     $('review-panel').hidden = true;
@@ -754,7 +757,7 @@ function render() {
   renderCompetition();
   setPlayer('left', left, labels, roles, controllers);
   setPlayer('right', right, labels, roles, controllers);
-  renderAvatar($('self-avatar'), seat, labels[seat]); $('self-name').textContent = `${roles(seat)} ${labels[seat]} · ${controllers(seat)}`; $('self-name').title = state.seatControllers?.[seat]?.id || ''; $('self-count').textContent = state.phase === 'waiting' ? readyLabel(seat) : `${state.hands[seat].count} 张`;
+  renderAvatar($('self-avatar'), seat, labels[seat]); $('self-name').textContent = `${roles(seat)} ${labels[seat]} · ${controllers(seat)}`; $('self-name').title = [state.seatControllers?.[seat]?.id, formatAgentMetadata(state.seatControllers?.[seat]?.agentMetadata)].filter(Boolean).join(' · '); $('self-count').textContent = state.phase === 'waiting' ? readyLabel(seat) : `${state.hands[seat].count} 张`;
   renderSelfHand(state.hands[seat].cards);
   renderBottomCards(state.bottom);
   renderTablePlays();
@@ -763,6 +766,7 @@ function render() {
   renderStrategies();
   renderDecisions();
   renderReviews();
+  if (!$('participant-panel').hidden) renderParticipantCard();
   $('rematch-game').hidden = replayMode ? !replayCanRematch : state.phase !== 'over' || !['landlord', 'farmers'].includes(state.winner);
   document.querySelectorAll('.perspectives button').forEach((button) => button.classList.toggle('active', Number(button.dataset.seat) === seat));
   $('global-view').classList.toggle('active', view === 'global'); $('global-view').setAttribute('aria-pressed', String(view === 'global'));
@@ -852,6 +856,7 @@ async function loadStrategyDetails(force = false) {
 
 async function setStrategyPanel(open) {
   if (open) {
+    hideParticipantPanel();
     $('decision-panel').hidden = true;
     $('review-panel').hidden = true;
     $('history-panel').hidden = true;
@@ -969,7 +974,7 @@ function strategyBody(markdown) {
 }
 
 function setDecisionPanel(open) {
-  if (open) { $('strategy-panel').hidden = true; $('review-panel').hidden = true; $('history-panel').hidden = true; $('agent-panel').hidden = true; }
+  if (open) { hideParticipantPanel(); $('strategy-panel').hidden = true; $('review-panel').hidden = true; $('history-panel').hidden = true; $('agent-panel').hidden = true; }
   $('decision-panel').hidden = !open;
   updateSidePanelLayout();
   $('decision-record').classList.toggle('active', open);
@@ -1015,7 +1020,7 @@ function createCompetitionReviewItem(review) {
 }
 
 function setReviewPanel(open) {
-  if (open) { $('strategy-panel').hidden = true; $('decision-panel').hidden = true; $('history-panel').hidden = true; $('agent-panel').hidden = true; }
+  if (open) { hideParticipantPanel(); $('strategy-panel').hidden = true; $('decision-panel').hidden = true; $('history-panel').hidden = true; $('agent-panel').hidden = true; }
   $('review-panel').hidden = !open;
   updateSidePanelLayout();
   $('review-record').classList.toggle('active', open);
@@ -1037,6 +1042,7 @@ function updateSidePanelLayout() {
 
 async function setHistoryPanel(open) {
   if (open) {
+    hideParticipantPanel();
     $('strategy-panel').hidden = true;
     $('decision-panel').hidden = true;
     $('review-panel').hidden = true;
@@ -1298,6 +1304,141 @@ function controllerLabel(id) {
   if (replayMode) return 'Bot';
   return controlActive && id === controlledSeat ? '玩家' : '未接入';
 }
+
+function participantForSeat(seatId) {
+  return state?.seatControllers?.[seatId] || replay?.participants?.[seatId] || null;
+}
+
+function participantPresenceLabel(seatId) {
+  const status = state?.seatPresence?.[seatId]?.status;
+  return ({ online: '在线', offline: '已掉线', managed: '托管中' })[status] || (replayMode ? '历史参赛者' : '状态未知');
+}
+
+function participantSummary(seatId) {
+  const participant = participantForSeat(seatId);
+  if (!participant) return '';
+  const name = participant.displayName || participant.id || `座位 ${['A', 'B', 'C'][seatId]}`;
+  if (participant.type === 'player') return `${name} · 玩家 · ${participantPresenceLabel(seatId)} · 悬停查看`;
+  const metadata = participant.agentMetadata || {};
+  return [name, 'Agent', metadata.modelId || '模型未声明', metadata.reasoningEffort ? `思考 ${metadata.reasoningEffort}` : '思考深度未声明', '悬停查看'].join(' · ');
+}
+
+function strategyExecutionLabel(participant, seatId) {
+  const strategy = strategyForSeat(seatId);
+  const declaredId = participant?.agentMetadata?.strategyId;
+  if (participant?.strategyMode === 'local') return `本地 Agent${declaredId ? ` · ${declaredId}` : ''}`;
+  if (participant?.strategyMode === 'server') return `服务端策略 · ${strategy?.name || strategy?.id || declaredId || '默认策略'}`;
+  return declaredId ? `未声明执行位置 · ${declaredId}` : '未声明';
+}
+
+function appendParticipantField(container, label, value) {
+  const row = document.createElement('div');
+  row.className = 'participant-field';
+  const term = document.createElement('dt');
+  term.textContent = label;
+  const detail = document.createElement('dd');
+  detail.textContent = value || '未声明';
+  row.append(term, detail);
+  container.appendChild(row);
+}
+
+function renderParticipantCard() {
+  if (!Number.isInteger(participantSeat)) return;
+  const participant = participantForSeat(participantSeat);
+  const content = $('participant-content');
+  content.innerHTML = '';
+  if (!participant) {
+    content.innerHTML = '<p class="decision-empty">该座位尚未接入</p>';
+    return;
+  }
+  const label = ['A', 'B', 'C'][participantSeat];
+  const metadata = participant.agentMetadata || {};
+  const strategy = strategyForSeat(participantSeat);
+  const hero = document.createElement('div');
+  hero.className = 'participant-hero';
+  const avatar = document.createElement('span');
+  avatar.className = 'participant-hero-avatar';
+  avatar.textContent = label;
+  const identity = document.createElement('div');
+  const heading = document.createElement('h2');
+  heading.textContent = participant.displayName || participant.id || `座位 ${label}`;
+  const badges = document.createElement('div');
+  badges.className = 'participant-badges';
+  const badgeValues = [participant.type === 'agent' ? 'Agent' : '玩家', `座位 ${label}`, participantPresenceLabel(participantSeat)];
+  if (participant.type === 'agent' && metadata.source === 'declared') badgeValues.push('信息自报');
+  badgeValues.forEach((value) => {
+    const badge = document.createElement('span');
+    badge.className = `participant-badge${value === '信息自报' ? ' declared' : ''}`;
+    badge.textContent = value;
+    badges.appendChild(badge);
+  });
+  identity.append(heading, badges);
+  hero.append(avatar, identity);
+  content.appendChild(hero);
+  if (participant.type === 'agent' && metadata.description) {
+    const description = document.createElement('p');
+    description.className = 'participant-description';
+    description.textContent = metadata.description;
+    content.appendChild(description);
+  }
+  const fields = document.createElement('dl');
+  fields.className = 'participant-fields';
+  appendParticipantField(fields, '公开标识', participant.id);
+  if (participant.type === 'agent') {
+    appendParticipantField(fields, '模型', metadata.modelId);
+    appendParticipantField(fields, '服务商', metadata.provider);
+    appendParticipantField(fields, '思考深度', metadata.reasoningEffort);
+    appendParticipantField(fields, '执行策略', strategyExecutionLabel(participant, participantSeat));
+    appendParticipantField(fields, '策略版本', metadata.strategyVersion || strategy?.updatedAt && new Date(strategy.updatedAt).toLocaleString('zh-CN'));
+    appendParticipantField(fields, '策略哈希', metadata.strategyHash || strategy?.hash);
+    appendParticipantField(fields, '客户端', metadata.clientVersion);
+  }
+  content.appendChild(fields);
+  const note = document.createElement('small');
+  note.className = 'participant-note';
+  note.textContent = participant.type === 'agent'
+    ? '模型、思考深度和自定义策略信息由 Agent 声明，不代表平台已验证；本地策略正文不会上传或公开。'
+    : '普通玩家仅公开名称、座位、连接状态和公开标识。';
+  content.appendChild(note);
+}
+
+function hideParticipantPanel() {
+  clearTimeout(participantHideTimer);
+  $('participant-panel').hidden = true;
+}
+
+function positionParticipantPopover(trigger) {
+  const panel = $('participant-panel');
+  const triggerRect = trigger.getBoundingClientRect();
+  const panelRect = panel.getBoundingClientRect();
+  const gap = 10;
+  let left = triggerRect.left < innerWidth / 3
+    ? triggerRect.right + gap
+    : triggerRect.right > innerWidth * 2 / 3
+      ? triggerRect.left - panelRect.width - gap
+      : triggerRect.left + triggerRect.width / 2 - panelRect.width / 2;
+  left = Math.max(8, Math.min(left, innerWidth - panelRect.width - 8));
+  let top = triggerRect.top + triggerRect.height / 2 - panelRect.height / 2;
+  top = Math.max(8, Math.min(top, innerHeight - panelRect.height - 8));
+  panel.style.left = `${left}px`;
+  panel.style.top = `${top}px`;
+}
+
+function showParticipantPopover(seatId, trigger) {
+  clearTimeout(participantHideTimer);
+  const resolvedSeat = normalizeSeat(seatId);
+  if (!participantForSeat(resolvedSeat)) return;
+  participantSeat = resolvedSeat;
+  renderParticipantCard();
+  $('participant-panel').hidden = false;
+  positionParticipantPopover(trigger);
+}
+
+function scheduleParticipantPopoverHide() {
+  clearTimeout(participantHideTimer);
+  participantHideTimer = setTimeout(hideParticipantPanel, 120);
+}
+
 function formatAgentMetadata(metadata) {
   if (!metadata) return '';
   return [metadata.modelId, metadata.reasoningEffort ? `推理 ${metadata.reasoningEffort}` : '', metadata.strategyId ? `策略 ${metadata.strategyId}` : '', metadata.clientVersion ? `客户端 ${metadata.clientVersion}` : ''].filter(Boolean).join(' · ');
@@ -1307,10 +1448,31 @@ function setPlayer(position, id, labels, roles, controllers) { renderAvatar($(`$
 function renderAvatar(element, id, label) {
   const role = ['play', 'over'].includes(state.phase) ? (state.landlord === id ? 'landlord' : 'farmer') : 'neutral';
   const roleLabel = role === 'landlord' ? '地主' : role === 'farmer' ? '农民' : '身份待定';
+  const participant = participantForSeat(id);
   element.textContent = label;
-  element.className = `avatar role-${role}`;
+  element.className = `avatar role-${role}${participant ? ' participant-trigger' : ''}`;
   element.dataset.role = role;
-  element.setAttribute('aria-label', `${label}，${roleLabel}`);
+  element.dataset.seatId = String(id);
+  element.setAttribute('aria-label', `${label}，${roleLabel}${participant ? `，${participantSummary(id)}` : '，尚未接入'}`);
+  if (!participant) {
+    element.removeAttribute('tabindex');
+    element.removeAttribute('aria-describedby');
+    element.onclick = null;
+    element.onkeydown = null;
+    element.onmouseenter = null;
+    element.onmouseleave = null;
+    element.onfocus = null;
+    element.onblur = null;
+    return;
+  }
+  element.tabIndex = 0;
+  element.setAttribute('aria-describedby', 'participant-panel');
+  element.onclick = null;
+  element.onkeydown = null;
+  element.onmouseenter = () => showParticipantPopover(id, element);
+  element.onmouseleave = scheduleParticipantPopoverHide;
+  element.onfocus = () => showParticipantPopover(id, element);
+  element.onblur = scheduleParticipantPopoverHide;
 }
 function readyLabel(id) { return state.readySeats?.includes(id) ? '已就绪' : state.seatControllers?.[id] ? '等待开始' : '等待加入'; }
 function toggle(id, visible) { $(id).hidden = !visible; }
@@ -1479,6 +1641,8 @@ $('session-code-header').onclick = async () => {
 };
 document.querySelectorAll('[data-strategy-seat]').forEach((button) => button.onclick = () => { strategySeat = normalizeSeat(button.dataset.strategySeat); renderStrategyDocument(); });
 document.querySelectorAll('[data-agent-type]').forEach((button) => button.onclick = () => setAgentPanel(true, button.dataset.agentType));
+$('participant-panel').onmouseenter = () => clearTimeout(participantHideTimer);
+$('participant-panel').onmouseleave = scheduleParticipantPopoverHide;
 document.querySelectorAll('[data-invite-type][data-invite-seat]').forEach((button) => button.onclick = () => createInvite(
   button.dataset.inviteType,
   button.dataset.inviteSeat === 'auto' ? null : Number(button.dataset.inviteSeat)
@@ -1495,7 +1659,7 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !$('agent-type-menu').hidden) { setAgentTypeMenu(false); $('agent-connect').focus(); }
   if (event.key === 'Escape' && !$('invite-menu').hidden) { setInviteMenu(false); $('invite-game').focus(); }
 });
-window.addEventListener('resize', () => { setAgentTypeMenu(false); setInviteMenu(false); });
+window.addEventListener('resize', () => { setAgentTypeMenu(false); setInviteMenu(false); hideParticipantPanel(); });
 
 async function initialize() {
   try {
