@@ -36,7 +36,7 @@ test('agent room API keeps room id stable when readiness creates the first game'
   const roomId = created.data.roomId;
   for (const seatId of [0, 1, 2]) {
     const joined = await json(`/agent/v1/rooms/${roomId}/join`, {
-      method: 'POST', body: { seatId, agentId: `agent-${seatId}`, strategyMode: 'local' }
+      method: 'POST', body: { seatId, agentId: `agent-${seatId}` }
     });
     assert.equal(joined.response.status, 200);
   }
@@ -73,5 +73,21 @@ test('MCP advertises room-first tools while retaining legacy game tools', async 
   const names = listed.data.result.tools.map((tool) => tool.name);
   assert.ok(names.includes('create_room'));
   assert.ok(names.includes('submit_room_action'));
+  assert.ok(names.includes('get_strategy'));
   assert.ok(names.includes('create_game'));
+});
+
+test('worker strategy catalog is query-only and returns managed Markdown explicitly', async () => {
+  const listed = await json('/agent/v1/strategies');
+  assert.deepEqual(listed.data.strategies.map(({ id }) => id), ['default']);
+  assert.equal(listed.data.strategies[0].markdown, undefined);
+
+  const strategy = await json('/agent/v1/strategies/default');
+  assert.equal(strategy.response.status, 200);
+  assert.equal(strategy.data.strategy.id, 'default');
+  assert.match(strategy.data.strategy.markdown, /^---\n/);
+
+  const missing = await json('/agent/v1/strategies/missing');
+  assert.equal(missing.response.status, 404);
+  assert.equal(missing.data.error, 'strategy_not_found');
 });

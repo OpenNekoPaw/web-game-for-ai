@@ -44,7 +44,7 @@ test('rematch waits for three ready seats then restores the same deal and first 
   assert.deepEqual(rematch.hands, [[], [], []]);
   assert.equal(rematch.agents.size, 0);
   assert.equal(rematch.players.size, 0);
-  assert.equal(rematch.agentStrategies.size, 0);
+  assert.equal(rematch.strategySnapshots.size, 0);
   assert.equal(rematch.competitionId, null);
   assert.equal(readReplay(rematch.gameId).sourceGameId, sourceGameId);
   assert.equal(listReplays().items.find((item) => item.gameId === rematch.gameId)?.sourceGameId, sourceGameId);

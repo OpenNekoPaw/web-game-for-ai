@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getStrategy as getFileStrategy, listStrategies } from '../game/strategy-store.js';
-import { getStrategy as getRuntimeStrategy } from '../game/strategy-runtime.js';
+import { getStrategy as getFileStrategy, listStrategies } from '../server/strategy-catalog-node.js';
+import { getStrategy as getRuntimeStrategy } from '../server/strategy-catalog-runtime.js';
+import { createMatch, getMatchStrategies, joinMatch, startMatch } from '../game/store.js';
 
 test('default strategy is one complete replaceable plan', () => {
   const listed = listStrategies();
@@ -37,6 +38,24 @@ test('unknown strategy ids are rejected instead of composed with default', () =>
   assert.throws(() => getFileStrategy('missing-plan'), /strategy_not_found/);
 });
 
-test('runtime strategy stays synchronized with the editable source', () => {
+test('generated worker catalog stays synchronized with the editable management source', () => {
   assert.equal(getRuntimeStrategy().markdown, getFileStrategy().markdown);
+});
+
+test('managed strategy binding is explicit, read-only, and absent from ordinary observations', () => {
+  const unboundGame = createMatch();
+  const unbound = joinMatch(unboundGame.gameId, 0, 'unbound-agent');
+  assert.equal(unbound.strategy, undefined);
+  assert.deepEqual(getMatchStrategies(unboundGame.gameId).participants[0].strategy, undefined);
+
+  const game = createMatch();
+  const snapshot = getFileStrategy('default');
+  const joined = joinMatch(game.gameId, 0, 'managed-agent', 'Managed Agent', { strategySnapshot: snapshot });
+  assert.equal(joined.strategy, undefined);
+  assert.equal(getMatchStrategies(game.gameId).participants[0].strategy.markdown, snapshot.markdown);
+
+  startMatch(game.gameId, 0);
+  assert.throws(() => joinMatch(game.gameId, 0, 'managed-agent', undefined, {
+    strategySnapshot: { ...snapshot, hash: 'changed-after-ready' }
+  }), /strategy_snapshot_locked/);
 });

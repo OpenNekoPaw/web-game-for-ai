@@ -1,6 +1,5 @@
 import { applyAction, chooseSimpleAction, createDeck, createGame, publicState, startGame } from './ddz.js';
 import { appendReplayFrame, bindReplayAccessToken, createReplay, exportReplayState, importReplayState, listReplays, readReplay, replayAccessMatches, updateReplayParticipants } from './replay-runtime.js';
-import { getStrategy, listStrategies } from './strategy-runtime.js';
 
 const games = new Map();
 const competitions = new Map();
@@ -63,8 +62,7 @@ export function createMatch(options = {}) {
   game.ready = new Set();
   game.decisions = [];
   game.actionHistory = [];
-  game.agentStrategies = new Map();
-  game.localStrategySeats = new Set();
+  game.strategySnapshots = new Map();
   game.reviews = new Map();
   game.actionStats = [createActionStats(), createActionStats(), createActionStats()];
   game.competitionId = options.competitionId || null;
@@ -227,8 +225,7 @@ export function createRoom(options = {}) {
     playerSessions: new Map(),
     displayNames: new Map(),
     agentMetadata: new Map(),
-    agentStrategies: new Map(),
-    localStrategySeats: new Set(),
+    strategySnapshots: new Map(),
     ready: new Set(),
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -287,7 +284,6 @@ export function observeRoom(roomId, seatId = 0, options = {}) {
     allReady: room.ready.size === 3,
     settlement: null,
     competition: null,
-    strategy: privateSeat !== null && room.agentStrategies.has(privateSeat) ? structuredClone(room.agentStrategies.get(privateSeat)) : null,
     strategyAssignments: revealAll ? strategyAssignments(room) : {},
     decisions: [],
     reviews: {},
@@ -301,7 +297,7 @@ export function observeRoom(roomId, seatId = 0, options = {}) {
   };
 }
 
-export function joinRoomAgent(roomId, seatId, agentId, strategyId, displayName, options = {}) {
+export function joinRoomAgent(roomId, seatId, agentId, displayName, options = {}) {
   const room = requireRoom(roomId);
   validateSeat(seatId);
   assertRoomWaitingOrExisting(room, room.agents.get(seatId) === agentId);
@@ -316,13 +312,7 @@ export function joinRoomAgent(roomId, seatId, agentId, strategyId, displayName, 
   if (options.agentMetadata !== undefined) {
     if (metadata) room.agentMetadata.set(seatId, metadata); else room.agentMetadata.delete(seatId);
   }
-  if (options.strategyMode === 'local') {
-    if (room.agentStrategies.has(seatId)) throw new Error('strategy_mismatch');
-    room.localStrategySeats.add(seatId);
-  } else if (room.localStrategySeats.has(seatId)) {
-    if (strategyId) throw new Error('strategy_mismatch');
-  } else if (!room.agentStrategies.has(seatId)) room.agentStrategies.set(seatId, getStrategy(strategyId));
-  else if (strategyId && room.agentStrategies.get(seatId).id !== strategyId) throw new Error('strategy_mismatch');
+  bindStrategySnapshot(room, seatId, options.strategySnapshot);
   room.updatedAt = Date.now();
   markMetadataAuthoritative();
   return withRoomAccess(room, observeRoom(roomId, seatId));
@@ -536,7 +526,7 @@ function snapshotReviver(key, value) {
   return value;
 }
 
-export function joinMatch(gameId, seatId, agentId, strategyId, displayName, options = {}) {
+export function joinMatch(gameId, seatId, agentId, displayName, options = {}) {
   const game = requireMatch(gameId);
   validateSeat(seatId);
   assertSeatAdmission(game, 'agent', agentId, options.viaInvite === true);
@@ -558,13 +548,7 @@ export function joinMatch(gameId, seatId, agentId, strategyId, displayName, opti
     if (metadata) game.agentMetadata.set(seatId, metadata);
     else game.agentMetadata.delete(seatId);
   }
-  if (options.strategyMode === 'local') {
-    if (game.agentStrategies.has(seatId)) throw new Error('strategy_mismatch');
-    game.localStrategySeats.add(seatId);
-  } else if (game.localStrategySeats.has(seatId)) {
-    if (strategyId) throw new Error('strategy_mismatch');
-  } else if (!game.agentStrategies.has(seatId)) game.agentStrategies.set(seatId, getStrategy(strategyId));
-  else if (strategyId && game.agentStrategies.get(seatId).id !== strategyId) throw new Error('strategy_mismatch');
+  bindStrategySnapshot(game, seatId, options.strategySnapshot);
   game.updatedAt = Date.now();
   updateReplayParticipants(gameId, participants(game));
   markGameAuthoritative(gameId);
@@ -639,13 +623,13 @@ export function resolveMatchInvite(token) {
   return publicInvite(requireInvite(token));
 }
 
-export function joinAgentInvite(token, agentId, displayName, agentMetadata) {
+export function joinAgentInvite(token, agentId, displayName, agentMetadata, strategySnapshot) {
   const invite = requireInvite(token, 'agent');
   const identity = normalizeInviteIdentity(agentId, 'anonymous');
   assertInviteIdentity(invite, identity);
   const result = invite.roomId
-    ? joinRoomAgent(invite.roomId, invite.seatId, identity, undefined, displayName, { strategyMode: 'local', viaInvite: true, agentMetadata })
-    : joinMatch(invite.gameId, invite.seatId, identity, undefined, displayName, { strategyMode: 'local', viaInvite: true, agentMetadata });
+    ? joinRoomAgent(invite.roomId, invite.seatId, identity, displayName, { viaInvite: true, agentMetadata, strategySnapshot })
+    : joinMatch(invite.gameId, invite.seatId, identity, displayName, { viaInvite: true, agentMetadata, strategySnapshot });
   if (!invite.usedBy) {
     invite.usedBy = identity;
     markMetadataAuthoritative();
@@ -775,7 +759,7 @@ export function observeMatch(gameId, seatId, options = {}) {
     : [{ type: 'play', cards: 'select from your hand' }, ...(game.lastPlay ? [{ type: 'pass' }] : [])];
   const readySeats = [...game.ready].sort();
   const reviewContext = game.phase === 'over' && privateSeat !== null && game.agents.has(privateSeat) ? buildReviewContext(game, privateSeat) : null;
-  return { protocol: 'agent-game.v1', ...publicState(game, privateSeat, revealAll), roomId: game.roomId || null, accessMode: game.accessMode, view: revealAll ? 'global' : privateSeat === null ? 'public' : 'player', you: viewSeat, controlAuthorized, controlledSeat: controlAuthorized ? Number(controlSeat) : null, roleContext: roleContext(game, viewSeat), isYourTurn, allowedActions, agentSeats: Object.fromEntries(game.agents), playerSeats: Object.fromEntries(game.players), seatControllers: seatControllers(game), seatPresence: seatPresence(game), readySeats, allReady: readySeats.length === 3, settlement: structuredClone(game.settlement), competition: game.competitionId ? competitionStateForGame(game, viewSeat, revealAll) : null, strategy: privateSeat !== null && game.agentStrategies.has(privateSeat) ? structuredClone(game.agentStrategies.get(privateSeat)) : null, strategyAssignments: revealAll ? strategyAssignments(game) : {}, decisions: revealAll ? structuredClone(game.decisions) : [], reviews: revealAll ? reviews(game) : privateSeat !== null && game.reviews.has(privateSeat) ? { [privateSeat]: structuredClone(game.reviews.get(privateSeat)) } : {}, reviewStatus: reviewStatus(game), reviewContext, turnTimeoutMs: game.turnTimeoutMs, turnStartedAt: game.turnStartedAt, turnDeadlineAt: game.turnDeadlineAt, serverNow: Date.now() };
+  return { protocol: 'agent-game.v1', ...publicState(game, privateSeat, revealAll), roomId: game.roomId || null, accessMode: game.accessMode, view: revealAll ? 'global' : privateSeat === null ? 'public' : 'player', you: viewSeat, controlAuthorized, controlledSeat: controlAuthorized ? Number(controlSeat) : null, roleContext: roleContext(game, viewSeat), isYourTurn, allowedActions, agentSeats: Object.fromEntries(game.agents), playerSeats: Object.fromEntries(game.players), seatControllers: seatControllers(game), seatPresence: seatPresence(game), readySeats, allReady: readySeats.length === 3, settlement: structuredClone(game.settlement), competition: game.competitionId ? competitionStateForGame(game, viewSeat, revealAll) : null, strategyAssignments: revealAll ? strategyAssignments(game) : {}, decisions: revealAll ? structuredClone(game.decisions) : [], reviews: revealAll ? reviews(game) : privateSeat !== null && game.reviews.has(privateSeat) ? { [privateSeat]: structuredClone(game.reviews.get(privateSeat)) } : {}, reviewStatus: reviewStatus(game), reviewContext, turnTimeoutMs: game.turnTimeoutMs, turnStartedAt: game.turnStartedAt, turnDeadlineAt: game.turnDeadlineAt, serverNow: Date.now() };
 }
 
 export function assertMatchRoomOwner(gameId, roomOwnerToken) {
@@ -826,8 +810,8 @@ export function submitMatchAction(gameId, seatId, action, expectedSeq, options =
 export function createDecisionRecord(game, seatId, action, decision, options = {}) {
   if (!decision) return null;
   const decidedAt = options.decidedAt ?? Date.now();
-  const assignedStrategy = game.agentStrategies?.has(seatId)
-    ? game.agentStrategies.get(seatId)
+  const assignedStrategy = game.strategySnapshots?.has(seatId)
+    ? game.strategySnapshots.get(seatId)
     : null;
   const strategy = assignedStrategy ? {
     id: assignedStrategy.id,
@@ -851,10 +835,6 @@ export function createDecisionRecord(game, seatId, action, decision, options = {
   };
 }
 
-export function getStrategies() {
-  return listStrategies();
-}
-
 export function submitMatchReview(gameId, seatId, review) {
   const game = requireMatch(gameId);
   validateSeat(seatId);
@@ -864,7 +844,7 @@ export function submitMatchReview(gameId, seatId, review) {
   const record = {
     seatId,
     agentId: game.agents.get(seatId),
-    strategy: strategySummary(game.agentStrategies.get(seatId)),
+    strategy: strategySummary(game.strategySnapshots.get(seatId)),
     submittedAt: Date.now(),
     ...normalized
   };
@@ -1068,7 +1048,6 @@ function seatControllers(game) {
         type: 'agent',
         id: game.agents.get(seatId),
         displayName: game.displayNames?.get(seatId) || game.agents.get(seatId),
-        strategyMode: game.localStrategySeats?.has(seatId) ? 'local' : game.agentStrategies?.has(seatId) ? 'server' : 'unspecified',
         ...(game.agentMetadata?.has(seatId) ? { agentMetadata: structuredClone(game.agentMetadata.get(seatId)) } : {})
       }
     : { type: 'player', id: game.players.get(seatId), displayName: game.displayNames?.get(seatId) || `玩家 ${['A', 'B', 'C'][seatId]}` }]));
@@ -1247,12 +1226,12 @@ export function roleContext(game, seatId) {
 function participants(game) {
   return Object.fromEntries(Object.entries(seatControllers(game)).map(([seatId, controller]) => [seatId, {
     ...controller,
-    ...(game.agentStrategies.has(Number(seatId)) ? { strategy: structuredClone(game.agentStrategies.get(Number(seatId))) } : {})
+    ...(game.strategySnapshots.has(Number(seatId)) ? { strategy: structuredClone(game.strategySnapshots.get(Number(seatId))) } : {})
   }]));
 }
 
 function strategyAssignments(game) {
-  return Object.fromEntries([...game.agentStrategies].map(([seatId, strategy]) => [seatId, strategySummary(strategy)]));
+  return Object.fromEntries([...game.strategySnapshots].map(([seatId, strategy]) => [seatId, strategySummary(strategy)]));
 }
 
 function strategySummary(strategy) {
@@ -1379,8 +1358,7 @@ function advanceCompetitionAfterRound(game) {
   nextGame.playerSessions = new Map([...game.playerSessions].map(([seatId, session]) => [seatId, structuredClone(session)]));
   nextGame.displayNames = new Map(game.displayNames);
   nextGame.agentMetadata = new Map([...game.agentMetadata].map(([seatId, metadata]) => [seatId, structuredClone(metadata)]));
-  nextGame.agentStrategies = new Map([...game.agentStrategies].map(([seatId, strategy]) => [seatId, structuredClone(strategy)]));
-  nextGame.localStrategySeats = new Set(game.localStrategySeats);
+  nextGame.strategySnapshots = new Map([...game.strategySnapshots].map(([seatId, strategy]) => [seatId, structuredClone(strategy)]));
   updateReplayParticipants(nextGame.gameId, participants(nextGame));
   competition.currentRound = nextRound;
   competition.currentGameId = nextGame.gameId;
@@ -1447,7 +1425,7 @@ function buildCompetitionReviewContext(competition, seatId) {
     scores: [...competition.scores],
     rank: competition.scores.filter((score) => score > competition.scores[seatId]).length + 1,
     rounds: ownRoundReviews,
-    strategy: structuredClone(currentGame.agentStrategies.get(seatId)),
+    strategy: structuredClone(currentGame.strategySnapshots.get(seatId)),
     guidance: [
       '区分偶发单局问题与多局重复出现的策略问题',
       '结合地主和农民两种身份比较策略表现',
@@ -1467,7 +1445,7 @@ function buildReviewContext(game, seatId) {
     landlord: game.landlord,
     settlement: structuredClone(game.settlement),
     finalCardCounts: game.hands.map((cards) => cards.length),
-    strategy: structuredClone(game.agentStrategies.get(seatId)),
+    strategy: structuredClone(game.strategySnapshots.get(seatId)),
     stats: {
       ...structuredClone(stats),
       averageDecisionMs: stats.decisionCount ? Math.round(stats.totalDecisionMs / stats.decisionCount) : null
@@ -1566,6 +1544,25 @@ function sameMetadata(left, right) {
   return JSON.stringify(left || null) === JSON.stringify(right || null);
 }
 
+function bindStrategySnapshot(target, seatId, snapshot) {
+  if (snapshot === undefined) return;
+  const normalized = snapshot === null ? null : normalizeStrategySnapshot(snapshot);
+  const existing = target.strategySnapshots.get(seatId) || null;
+  const locked = target.ready?.has(seatId)
+    || (target.phase !== undefined && target.phase !== 'waiting')
+    || (target.status !== undefined && target.status !== 'waiting');
+  if (locked && JSON.stringify(existing) !== JSON.stringify(normalized)) throw new Error('strategy_snapshot_locked');
+  if (normalized) target.strategySnapshots.set(seatId, normalized);
+  else target.strategySnapshots.delete(seatId);
+}
+
+function normalizeStrategySnapshot(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid_strategy_snapshot');
+  const required = ['id', 'name', 'hash', 'markdown'];
+  if (required.some((field) => typeof value[field] !== 'string' || !value[field])) throw new Error('invalid_strategy_snapshot');
+  return structuredClone(value);
+}
+
 function hydrateGame(game) {
   game.roomId ||= null;
   game.accessMode = normalizeAccessMode(game.accessMode);
@@ -1574,6 +1571,11 @@ function hydrateGame(game) {
   game.allowedAgentIds = game.allowedAgentIds instanceof Set ? game.allowedAgentIds : normalizeIdentitySet(game.allowedAgentIds);
   game.allowedPlayerIds = game.allowedPlayerIds instanceof Set ? game.allowedPlayerIds : normalizeIdentitySet(game.allowedPlayerIds);
   game.agentMetadata = game.agentMetadata instanceof Map ? game.agentMetadata : new Map();
+  game.strategySnapshots = game.strategySnapshots instanceof Map
+    ? game.strategySnapshots
+    : game.agentStrategies instanceof Map ? game.agentStrategies : new Map();
+  delete game.agentStrategies;
+  delete game.localStrategySeats;
   game.playerSessions = game.playerSessions instanceof Map ? game.playerSessions : new Map();
   game.updatedAt = Number(game.updatedAt) || Number(game.gameId?.slice(4)) || Date.now();
   for (const seatId of game.players?.keys?.() || []) {
@@ -1598,8 +1600,11 @@ function hydrateRoom(room) {
   room.playerSessions = room.playerSessions instanceof Map ? room.playerSessions : new Map();
   room.displayNames = room.displayNames instanceof Map ? room.displayNames : new Map();
   room.agentMetadata = room.agentMetadata instanceof Map ? room.agentMetadata : new Map();
-  room.agentStrategies = room.agentStrategies instanceof Map ? room.agentStrategies : new Map();
-  room.localStrategySeats = room.localStrategySeats instanceof Set ? room.localStrategySeats : new Set();
+  room.strategySnapshots = room.strategySnapshots instanceof Map
+    ? room.strategySnapshots
+    : room.agentStrategies instanceof Map ? room.agentStrategies : new Map();
+  delete room.agentStrategies;
+  delete room.localStrategySeats;
   room.ready = room.ready instanceof Set ? room.ready : new Set();
   room.gameIds ||= [];
   room.currentGameId ||= null;
@@ -1714,16 +1719,14 @@ function linkRoomToGame(room, game) {
   game.playerSessions = new Map([...room.playerSessions].map(([seatId, session]) => [seatId, structuredClone(session)]));
   game.displayNames = new Map(room.displayNames);
   game.agentMetadata = new Map([...room.agentMetadata].map(([seatId, metadata]) => [seatId, structuredClone(metadata)]));
-  game.agentStrategies = new Map([...room.agentStrategies].map(([seatId, strategy]) => [seatId, structuredClone(strategy)]));
-  game.localStrategySeats = new Set(room.localStrategySeats);
+  game.strategySnapshots = new Map([...room.strategySnapshots].map(([seatId, strategy]) => [seatId, structuredClone(strategy)]));
   game.ready = new Set(room.ready);
   room.agents = game.agents;
   room.players = game.players;
   room.playerSessions = game.playerSessions;
   room.displayNames = game.displayNames;
   room.agentMetadata = game.agentMetadata;
-  room.agentStrategies = game.agentStrategies;
-  room.localStrategySeats = game.localStrategySeats;
+  room.strategySnapshots = game.strategySnapshots;
   room.ready = game.ready;
   room.currentGameId = game.gameId;
   if (!room.gameIds.includes(game.gameId)) room.gameIds.push(game.gameId);
@@ -1737,8 +1740,7 @@ function adoptCurrentGameState(room, game) {
   room.playerSessions = game.playerSessions;
   room.displayNames = game.displayNames;
   room.agentMetadata = game.agentMetadata;
-  room.agentStrategies = game.agentStrategies;
-  room.localStrategySeats = game.localStrategySeats;
+  room.strategySnapshots = game.strategySnapshots;
   room.ready = game.ready;
   room.currentGameId = game.gameId;
   if (!room.gameIds.includes(game.gameId)) room.gameIds.push(game.gameId);

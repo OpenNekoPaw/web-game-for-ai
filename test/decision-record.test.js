@@ -15,7 +15,7 @@ test('decision records bind the game and immutable strategy identity', () => {
     gameId: 'ddz-123',
     seq: 8,
     phase: 'play',
-    agentStrategies: new Map([[1, strategy]])
+    strategySnapshots: new Map([[1, strategy]])
   };
 
   const record = createDecisionRecord(

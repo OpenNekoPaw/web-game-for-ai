@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { assetsDirectory } from './runtime-paths.js';
+import { assetsDirectory } from '../game/runtime-paths.js';
 
+// Read-only management/query catalog. Gameplay code never imports this module.
 const strategiesDirectory = join(assetsDirectory, 'strategies', 'ddz');
 const DEFAULT_STRATEGY_ID = 'default';
 

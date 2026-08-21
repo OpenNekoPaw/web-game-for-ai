@@ -7,12 +7,16 @@
     "node": ">=24"
   },
   "scripts": {
+    "generate:strategy-catalog": "node scripts/generate-strategy-catalog.js",
     "start": "node scripts/supervise-server.js",
     "start:once": "node server.js",
+    "predev:cloudflare": "npm run generate:strategy-catalog",
     "dev:cloudflare": "npx wrangler dev",
+    "predeploy:cloudflare": "npm run generate:strategy-catalog",
     "deploy:cloudflare": "npx wrangler deploy",
     "build:binary": "bash scripts/build-binary.sh",
     "test:binary": "bash scripts/test-binary.sh",
+    "pretest": "npm run generate:strategy-catalog",
     "test": "REPLAY_PERSISTENCE=memory node --test"
   }
 }

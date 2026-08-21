@@ -37,8 +37,7 @@ test('access modes distinguish open, invite-only, and private admission', () => 
 
 test('agent metadata is normalized, replayed, and locked when the seat is ready', () => {
   const game = createMatch();
-  const initial = joinMatch(game.gameId, 0, 'agent-a', undefined, 'Agent A', {
-    strategyMode: 'local',
+  const initial = joinMatch(game.gameId, 0, 'agent-a', 'Agent A', {
     agentMetadata: {
       description: '擅长残局规划与农民协作',
       modelId: 'gpt-5.6',
@@ -59,15 +58,13 @@ test('agent metadata is normalized, replayed, and locked when the seat is ready'
     strategyId: 'local-default',
     strategyHash: 'sha256:abc'
   });
-  assert.equal(initial.seatControllers[0].strategyMode, 'local');
+  assert.equal(initial.seatControllers[0].strategyMode, undefined);
 
-  joinMatch(game.gameId, 0, 'agent-a', undefined, undefined, {
-    strategyMode: 'local',
+  joinMatch(game.gameId, 0, 'agent-a', undefined, {
     agentMetadata: { modelId: 'gpt-5.6', reasoningEffort: 'xhigh' }
   });
   startMatch(game.gameId, 0);
-  assert.throws(() => joinMatch(game.gameId, 0, 'agent-a', undefined, undefined, {
-    strategyMode: 'local',
+  assert.throws(() => joinMatch(game.gameId, 0, 'agent-a', undefined, {
     agentMetadata: { modelId: 'gpt-5.6', reasoningEffort: 'low' }
   }), /agent_metadata_locked/);
 
@@ -82,8 +79,7 @@ test('competition preserves access mode and agent metadata across rounds', () =>
   assert.match(competition.replayAccessToken, /^[A-Za-z0-9_-]{32,128}$/);
   assert.equal(game.replayAccessToken, competition.replayAccessToken);
   for (const [seatId, agentId] of ['a', 'b', 'c'].entries()) {
-    joinMatch(game.gameId, seatId, agentId, undefined, agentId.toUpperCase(), {
-      strategyMode: 'local',
+    joinMatch(game.gameId, seatId, agentId, agentId.toUpperCase(), {
       agentMetadata: { modelId: `model-${agentId}`, reasoningEffort: 'medium' }
     });
   }
@@ -109,10 +105,10 @@ test('invalid access and metadata inputs are rejected', () => {
   assert.throws(() => createMatch({ accessMode: 'public' }), /invalid_access_mode/);
   assert.throws(() => createMatch({ allowedAgentIds: 'agent-a' }), /invalid_access_list/);
   const game = createMatch();
-  assert.throws(() => joinMatch(game.gameId, 0, 'agent-a', undefined, undefined, {
+  assert.throws(() => joinMatch(game.gameId, 0, 'agent-a', undefined, {
     agentMetadata: {}
   }), /invalid_agent_metadata/);
-  assert.throws(() => joinMatch(game.gameId, 1, 'agent-b', undefined, undefined, {
+  assert.throws(() => joinMatch(game.gameId, 1, 'agent-b', undefined, {
     agentMetadata: { description: 'x'.repeat(201) }
   }), /invalid_agent_metadata/);
 });

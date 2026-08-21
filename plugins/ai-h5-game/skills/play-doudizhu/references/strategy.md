@@ -6,13 +6,13 @@ Gameplay decisions belong to the model and the selected editable Markdown strate
 
 1. The game service is authoritative for current state, information visibility, turn ownership, legality, timeout, settlement, and replay.
 2. [rules.md](rules.md) defines the supported MVP combinations and comparison rules.
-3. The Agent-owned Markdown strategy guides and constrains bidding, hand organization, card-strength preservation, role-specific play, farmer cooperation, endgame behavior, and review criteria. It never leaves the Agent runtime. A server-catalog strategy is optional and must be explicitly selected.
+3. The Markdown strategy loaded into the Agent guides and constrains bidding, hand organization, card-strength preservation, role-specific play, farmer cooperation, endgame behavior, and review criteria. An Agent-owned file never leaves the Agent runtime. A managed strategy must be explicitly downloaded with `get_strategy`; its service copy exists only for management, audit, and read-only display.
 
 Rules override a strategy when they conflict. A strategy chooses among legal actions but cannot create a legal action or reveal hidden information.
 
 ## Applying a strategy
 
-- Read the complete strategy snapshot after joining and keep it fixed for that match.
+- Read the complete strategy before joining and keep it fixed for that match. Passing its `strategyId` to `join_room` only binds a display/audit snapshot and never asks the service to execute it.
 - During bidding, use its bidding section with the current private hand and `bidStage`.
 - During play, select the role section using `roleContext`: landlord, landlord upstream farmer, or landlord downstream farmer.
 - Re-evaluate from the latest private hand and public state after every `seq` change. The model is responsible for recognizing combinations, comparing alternatives, tracking public evidence, and choosing an action.

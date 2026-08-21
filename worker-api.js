@@ -1,13 +1,13 @@
 import {
   assertMatchRoomOwner, assertRoomOwnerById, createCompetition, createMatch, createMatchInvite, createRematch, createRematchRoom, createRoom, createRoomInvite, exportStoreState,
-  getAuthorizedReplay, getMatch, getMatchStrategies, getRoom, getRoomStrategies, getStrategies, importStoreState,
+  getAuthorizedReplay, getMatch, getMatchStrategies, getRoom, getRoomStrategies, importStoreState,
   joinAgentInvite, joinAvailablePlayerMatch, joinAvailableRoomPlayer, joinMatch, joinPlayerInvite, joinPlayerMatch, joinRoomAgent, observeCompetition,
   listAccessibleReplays, observeMatch, observeRoom, readyRoom, removeDisconnectedPlayer, removeDisconnectedRoomPlayer,
   resolveMatchInvite, startMatch, submitCompetitionReview, submitMatchAction, submitMatchReview, submitRoomAction
 } from './game/store.js';
-import { getStrategy } from './game/strategy-runtime.js';
 import { browserPlayerResult, browserSessionCookie, browserSessionToken } from './server/browser-session.js';
 import { handleMcpMessage } from './server/mcp.js';
+import * as strategyCatalog from './server/strategy-catalog-runtime.js';
 
 const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), {
   status, headers: { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': '*', ...headers }
@@ -32,11 +32,12 @@ export async function handleWorkerRequest(request) {
   const url = new URL(request.url);
   try {
     if (url.pathname === '/mcp' || url.pathname === '/agent/mcp') return await mcp(request);
-    if (request.method === 'GET' && url.pathname === '/api/agent-guide') {
-      const strategy = getStrategy();
-      return json({ protocol: 'agent-game.v1', format: 'agentskills', fileName: 'default.md', hash: strategy.hash, markdown: strategy.markdown });
+    if (request.method === 'GET' && url.pathname === '/agent/v1/strategies') return json({ protocol: 'agent-game.v1', ...strategyCatalog.listStrategies() });
+    const managedStrategy = url.pathname.match(/^\/agent\/v1\/strategies\/([^/]+)$/);
+    if (request.method === 'GET' && managedStrategy) {
+      try { return json({ protocol: 'agent-game.v1', strategy:strategyCatalog.getStrategy(decodeURIComponent(managedStrategy[1])) }); }
+      catch (error) { return json({ error:error.message }, error.message === 'strategy_not_found' ? 404 : 400); }
     }
-    if (request.method === 'GET' && url.pathname === '/agent/v1/strategies') return json({ protocol: 'agent-game.v1', ...getStrategies() });
     if (request.method === 'GET' && url.pathname === '/api/replays') return json(listAccessibleReplays({ limit: url.searchParams.get('limit'), offset: url.searchParams.get('offset'), status: url.searchParams.get('status'), replayAccessToken: replayAccess(request) }));
 
     if (request.method === 'POST' && (url.pathname === '/api/rooms' || url.pathname === '/agent/v1/rooms')) return json(createRoom(await body(request)), 201);
@@ -45,7 +46,7 @@ export async function handleWorkerRequest(request) {
       const data = request.method === 'POST' ? await body(request) : {};
       const seatId = Number(request.method === 'GET' ? url.searchParams.get('seatId') : data.seatId);
       try {
-        if (agentRoom[2] === 'join' && request.method === 'POST') return json(joinRoomAgent(agentRoom[1], seatId, String(data.agentId || 'anonymous'), data.strategyId, data.displayName, { strategyMode:data.strategyMode, agentMetadata:data.agentMetadata }));
+        if (agentRoom[2] === 'join' && request.method === 'POST') return json(joinRoomAgent(agentRoom[1], seatId, String(data.agentId || 'anonymous'), data.displayName, { strategySnapshot:data.strategyId ? strategyCatalog.getStrategy(data.strategyId) : undefined, agentMetadata:data.agentMetadata }));
         if (agentRoom[2] === 'observe' && request.method === 'GET') return json(observeRoom(agentRoom[1], seatId));
         if (agentRoom[2] === 'ready' && request.method === 'POST') return json(readyRoom(agentRoom[1], seatId));
         if (agentRoom[2] === 'actions' && request.method === 'POST') return json(submitRoomAction(agentRoom[1], data.gameId, seatId, data.action, data.seq, { source:'agent', decision:data.decision }));
@@ -81,7 +82,7 @@ export async function handleWorkerRequest(request) {
     if (agentInvite) {
       try {
         if (request.method === 'GET' && !agentInvite[2]) return json(resolveMatchInvite(agentInvite[1]));
-        if (request.method === 'POST' && agentInvite[2] === 'join') { const data = await body(request); return json(joinAgentInvite(agentInvite[1], data.agentId, data.displayName, data.agentMetadata)); }
+        if (request.method === 'POST' && agentInvite[2] === 'join') { const data = await body(request); return json(joinAgentInvite(agentInvite[1], data.agentId, data.displayName, data.agentMetadata, data.strategyId ? strategyCatalog.getStrategy(data.strategyId) : undefined)); }
       } catch (error) { return json({ protocol: 'agent-game.v1', ok: false, error: error.message }, error.message === 'invite_not_found' ? 404 : 400); }
     }
     if (request.method === 'POST' && (url.pathname === '/api/competitions' || url.pathname === '/agent/v1/competitions')) return json(createCompetition(await body(request)), 201);
@@ -113,7 +114,7 @@ export async function handleWorkerRequest(request) {
       const data = request.method === 'POST' ? await body(request) : {};
       const seatId = Number(request.method === 'GET' ? url.searchParams.get('seatId') : data.seatId);
       try {
-        if (agentMatch[2] === 'join' && request.method === 'POST') return json(joinMatch(agentMatch[1], seatId, String(data.agentId || 'anonymous'), data.strategyId, data.displayName, { strategyMode: data.strategyMode, agentMetadata: data.agentMetadata }));
+        if (agentMatch[2] === 'join' && request.method === 'POST') return json(joinMatch(agentMatch[1], seatId, String(data.agentId || 'anonymous'), data.displayName, { strategySnapshot:data.strategyId ? strategyCatalog.getStrategy(data.strategyId) : undefined, agentMetadata:data.agentMetadata }));
         if (agentMatch[2] === 'observe' && request.method === 'GET') return json(observeMatch(agentMatch[1], seatId));
         if (agentMatch[2] === 'start' && request.method === 'POST') return json(startMatch(agentMatch[1], seatId));
         if (agentMatch[2] === 'actions' && request.method === 'POST') return json(submitMatchAction(agentMatch[1], seatId, data.action, data.seq, { source: 'agent', decision: data.decision }));
@@ -142,7 +143,7 @@ export async function handleWorkerRequest(request) {
 async function mcp(request) {
   if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
   try {
-    const response = await handleMcpMessage(await body(request));
+    const response = await handleMcpMessage(await body(request), { strategyCatalog });
     return response ? json(response) : new Response(null, { status: 202, headers: { 'access-control-allow-origin': '*' } });
   } catch (error) {
     if (error instanceof SyntaxError) return json({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }, 400);

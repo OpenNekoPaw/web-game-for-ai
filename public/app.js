@@ -771,7 +771,7 @@ function renderStrategyDocument() {
   if (!strategy) {
     const empty = document.createElement('p');
     empty.className = 'decision-empty';
-    empty.textContent = participant?.type === 'player' ? '人工玩家未绑定 Agent 策略' : participant?.type === 'agent' ? '本地 Agent 未向服务端公开策略' : '该席位尚未接入';
+    empty.textContent = participant?.type === 'player' ? '人工玩家未绑定 Agent 策略' : participant?.type === 'agent' ? '该 Agent 未绑定可查看的托管策略，可能使用本地策略' : '该席位尚未接入';
     content.appendChild(empty);
     return;
   }
@@ -1175,9 +1175,8 @@ function participantSummary(seatId) {
 function strategyExecutionLabel(participant, seatId) {
   const strategy = strategyForSeat(seatId);
   const declaredId = participant?.agentMetadata?.strategyId;
-  if (participant?.strategyMode === 'local') return `本地 Agent${declaredId ? ` · ${declaredId}` : ''}`;
-  if (participant?.strategyMode === 'server') return `服务端策略 · ${strategy?.name || strategy?.id || declaredId || '默认策略'}`;
-  return declaredId ? `未声明执行位置 · ${declaredId}` : '未声明';
+  if (strategy) return `托管只读 · ${strategy.name || strategy.id}`;
+  return declaredId ? `Agent 声明 · ${declaredId}` : '未声明';
 }
 
 function appendParticipantField(container, label, value) {
@@ -1238,7 +1237,7 @@ function renderParticipantCard() {
     appendParticipantField(fields, '服务商', metadata.provider);
     appendParticipantField(fields, '思考深度', metadata.reasoningEffort);
     appendParticipantField(fields, '执行策略', strategyExecutionLabel(participant, participantSeat));
-    appendParticipantField(fields, '策略版本', metadata.strategyVersion || strategy?.updatedAt && new Date(strategy.updatedAt).toLocaleString('zh-CN'));
+    appendParticipantField(fields, '策略版本', metadata.strategyVersion || (strategy?.updatedAt && strategy.updatedAt > 1 ? new Date(strategy.updatedAt).toLocaleString('zh-CN') : ''));
     appendParticipantField(fields, '策略哈希', metadata.strategyHash || strategy?.hash);
     appendParticipantField(fields, '客户端', metadata.clientVersion);
   }
@@ -1246,7 +1245,7 @@ function renderParticipantCard() {
   const note = document.createElement('small');
   note.className = 'participant-note';
   note.textContent = participant.type === 'agent'
-    ? '模型、思考深度和自定义策略信息由 Agent 声明，不代表平台已验证；本地策略正文不会上传或公开。'
+    ? '模型和本地策略信息由 Agent 声明；托管策略正文仅供管理、查询和只读展示，实际策略执行始终在 Agent 侧。'
     : '普通玩家仅公开名称、座位、连接状态和公开标识。';
   content.appendChild(note);
 }

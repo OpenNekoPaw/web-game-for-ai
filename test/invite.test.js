@@ -88,7 +88,7 @@ test('agent invite keeps local strategy outside the game server', () => {
   const joined = joinAgentInvite(invite.token, 'local-agent-b', '本地 Agent B');
 
   assert.equal(joined.seatControllers[1].type, 'agent');
-  assert.equal(joined.strategy, null);
+  assert.equal(joined.strategy, undefined);
   assert.equal(getMatchStrategies(game.gameId).participants[1].strategy, undefined);
   assert.throws(() => joinPlayerInvite(invite.token, 'browser-b'), /invite_type_mismatch/);
   assert.throws(() => createMatchInvite(game.gameId, 'agent', undefined, game.roomOwnerToken), /invalid_seat/);

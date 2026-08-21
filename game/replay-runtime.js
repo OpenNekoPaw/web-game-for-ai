@@ -220,7 +220,6 @@ function replaySummary(replay) {
     frameCount: Array.isArray(replay.entries) ? replay.entries.length : replay.frames.length,
     participants: Object.fromEntries(Object.entries(replay.participants || {}).map(([seatId, participant]) => [seatId, {
       type: participant.type, id: participant.id, displayName: participant.displayName,
-      strategyMode: participant.strategyMode,
       agentMetadata: participant.agentMetadata ? structuredClone(participant.agentMetadata) : undefined,
       strategy: participant.strategy ? {
         id: participant.strategy.id, name: participant.strategy.name,

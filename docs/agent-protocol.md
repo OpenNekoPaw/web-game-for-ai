@@ -63,9 +63,15 @@ Room 只公开“公开房间”和“私人房间”两种类型。旧单局兼
 }
 ```
 
-所有字段均可选，其中 `description` 最长 200 字；但 `agentMetadata` 一旦出现至少要包含一个有效字段。服务端会添加 `source=declared`，表示这些值由 Agent 自报，不应视为运行环境证明。平台托管 Agent 若需要可信模型信息，应由平台在接入层注入并另外完成签名或审计。`seatControllers` 还会由服务端公开派生的 `strategyMode=local|server`，用于区分本地 Agent 执行与服务端目录策略。
+所有字段均可选，其中 `description` 最长 200 字；但 `agentMetadata` 一旦出现至少要包含一个有效字段。服务端会添加 `source=declared`，表示这些值由 Agent 自报，不应视为运行环境证明。平台托管 Agent 若需要可信模型信息，应由平台在接入层注入并另外完成签名或审计。服务端不再派生 `strategyMode`，因为无论策略来自本地文件还是托管目录，真正执行者始终是 Agent。
 
 同一 Agent 在座位准备前可以更新声明信息；调用 `ready_room` 使该席位就绪后，信息锁定，修改会返回 `agent_metadata_locked`。声明信息保存在 `seatControllers[seatId].agentMetadata`、全局参与者信息和回放记录中，并随多局比赛的下一局继承。
+
+## 策略管理与只读展示
+
+策略目录属于管理与查询能力，不属于对局引擎。`list_strategies` 列出托管策略，`get_strategy(strategyId)` 返回完整 Markdown；对应 HTTP 查询为 `GET /agent/v1/strategies` 和 `GET /agent/v1/strategies/:strategyId`。Agent 必须主动下载并在本地模型上下文中读取策略，服务端不会解析策略规则、生成候选动作或根据策略推荐出牌。
+
+Agent 加入时可选传入顶层 `strategyId`，表示把已下载的托管策略绑定为本局只读快照，供房主“玩家策略”面板、决策记录和回放查看。服务端不会自动选择默认策略，普通观察也不会向 Agent 注入策略正文。未上传的本地策略只保存 Agent 自报的 `agentMetadata.strategyId/strategyVersion/strategyHash`，不会伪造可查看正文。
 
 MCP 配置示例：
 
@@ -108,7 +114,7 @@ Room 是玩家入口，Competition 是多局计分容器，Game 是单局历史�
 - 以当前视角为底部时，左侧是 `seat + 2`，右侧是 `seat + 1`（例如 A 视角左 C、右 B）。
 - H5 规范 URL 为 `/?room=<roomId>`，不包含 `game`、`competition`、`seat`、`control`、`setup` 或 `view`。界面座位方向保存在当前页面状态中；只有请求头中的有效座位 Token 才能决定私有手牌视角。
 - H5 普通玩家通过 `POST /api/rooms/:roomId/join` 占座，Agent 通过 `join_room` 或 `/agent/v1/rooms/:roomId/join` 占座；两者可以任意组合，但不能占用同一座位。
-- 只有使用服务端目录策略的席位会在房主全局牌面展示策略；该接口要求 `x-room-owner-token`。本地 Agent 策略不上传，也不会出现在该接口或回放中。
+- 只有主动绑定托管策略快照的席位会在房主全局牌面展示完整策略；该接口要求 `x-room-owner-token`。本地 Agent 策略不上传，只展示 Agent 自报的标识、版本和哈希。
 - `seatControllers` 返回每个已占座位置的 `{type,id,displayName}`，其中 `type` 为 `player` 或 `agent`。`id` 只是稳定公开标识，不能作为座位凭证；`displayName` 是牌桌、策略面板和历史对局显示的公开名称（最多 40 字符）。`readySeats` 只包含已明确确认开始的座位。
 - 普通牌：`rank:suit`，例如 `3:0`。
 - rank：`3..15`，其中 `11=J`、`12=Q`、`13=K`、`14=A`、`15=2`。
@@ -123,6 +129,8 @@ Content-Type: application/json
 
 {"seatId":0,"agentId":"codex-session-a","displayName":"Codex 策略 A","strategyId":"default","agentMetadata":{"modelId":"gpt-5.6","reasoningEffort":"high"}}
 ```
+
+这里的顶层 `strategyId` 仅绑定管理目录中的只读快照。Agent 应先调用 `get_strategy` 下载并读取它；占座本身不会让服务端执行该策略。
 
 同一 `agentId` 可以重连原座位；其他 Agent 占用后返回 `seat_occupied`。
 
@@ -227,7 +235,7 @@ Agent 可以附加可公开的结构化决策摘要；该字段可选，不影�
 ```
 
 - `summary` 必填，最多 160 字符；`intent` 可选，最多 80 字符；`confidence` 可选，范围为 0–1。
-- `durationMs` 由服务端按回合开始时间计算，Agent 不提交。服务端目录策略会附加 `id/updatedAt/hash`；本地策略不上传，因此决策记录不会包含其正文或标识。
+- `durationMs` 由服务端按回合开始时间计算，Agent 不提交。显式绑定的托管策略快照会附加 `id/updatedAt/hash` 作为审计引用；本地策略不上传，只有 Agent 自报元数据可被记录。
 - 只提交可公开的结论摘要，不要发送模型思维链、完整提示词、私有工具日志或基于隐藏牌的推测。
 - 摘要写入对局记录，仅在 H5 全局视角和回放中展示。
 
@@ -241,4 +249,4 @@ Agent 可以附加可公开的结构化决策摘要；该字段可选，不影�
 - 服务端不替代空座，但会为已占座且掉线的普通玩家托管。在线玩家和 Agent 的回合固定为 60 秒；超时属于裁判兜底。托管和超时均在叫地主阶段自动“不叫”、抢地主阶段自动“不抢”、跟牌阶段自动“不要”，必须领出时选择一个最小合法动作。
 - Node 本地服务在进程内保存牌局；Cloudflare 部署使用 Durable Object 串行处理请求，并按牌局保存短时恢复检查点。只有权威状态变化触发写入，观察、心跳、倒计时和被拒绝的动作不写入。
 - 每轮有独立回放和结算，综合总结只在最后一轮完成后提交。
-- 本地策略由 Agent 自己读取并按对局锁定，只提供给本地模型。`strategies/ddz/*.md` 是可选的服务端目录策略；两种方式都要求一份文件是一套完整方案。复盘只提出建议，不自动编辑策略。
+- 本地策略由 Agent 自己读取并按对局锁定，只提供给本地模型。`strategies/ddz/*.md` 是可下载和只读展示的托管策略来源，服务端不解释或执行其内容。两种来源都要求一份文件是一套完整方案；复盘只提出建议，不自动编辑策略。

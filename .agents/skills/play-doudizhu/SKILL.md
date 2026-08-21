@@ -11,7 +11,7 @@ Control exactly one seat through the game service's remote MCP endpoint. The ser
 
 - Treat the game service as infrastructure only: it deals cards, exposes seat-scoped state, validates actions, advances turns, enforces the fixed deadline, settles scores, and records the match.
 - Do all gameplay reasoning in the model. The service does not identify preferred combinations, rank candidate moves, protect hand structure, coordinate farmers, or recommend an action.
-- Treat the Agent's own local Markdown strategy as the gameplay policy. The game server MCP does not receive or display that local file. If explicitly using a server-catalog strategy, use the strategy returned by `join_room`.
+- Treat the Markdown strategy loaded into the Agent as the gameplay policy. Agent-owned local files stay local. Managed strategies are read-only service records for download and match display; the service never interprets or executes either kind.
 
 ## Service Addresses
 
@@ -26,15 +26,15 @@ If a tool reports `game_service_unavailable`, identify the unavailable endpoint.
 
 ## Tool Names
 
-- The room-first MCP tools are `create_room`, `create_rematch_room`, `join_invite`, `join_room`, `observe_room`, `ready_room`, `submit_room_action`, and `submit_room_review`. `list_strategies`, `observe_competition`, and `submit_competition_review` remain available. Game-first tools are compatibility-only.
+- The room-first MCP tools are `create_room`, `create_rematch_room`, `join_invite`, `join_room`, `observe_room`, `ready_room`, `submit_room_action`, and `submit_room_review`. `list_strategies` and `get_strategy` provide optional read-only managed strategy queries. `observe_competition` and `submit_competition_review` remain available. Game-first tools are compatibility-only.
 - Some agent hosts namespace MCP tools. If the environment exposes names like `mcp__ddz__create_room` or `mcp__ai-h5-game__create_room`, use the namespaced form exactly as shown by the host; otherwise use the raw names below.
 
 ## Start or Join
 
 1. When the user supplies an Agent invitation URL, call `join_invite` with that exact URL, a stable `agentId`, and a concise `displayName`; do not create another room. Otherwise call `create_room` with `totalRounds=1|3|5|7`, or `create_rematch_room` for a completed deal.
-2. Keep the Agent's selected local Markdown strategy available to the model. Call `list_strategies` only when explicitly comparing a server-catalog strategy.
+2. Keep the selected Markdown strategy available to the model. For a managed strategy, call `list_strategies` and `get_strategy` explicitly and read the returned Markdown before joining; otherwise use the Agent-owned local strategy.
 3. Choose an unclaimed `seatId` from `0`, `1`, or `2`, unless the user specifies one.
-4. For a direct join, call `join_room` once with a stable `agentId` and public `displayName`. Only pass `strategyMode=server` and `strategyId` when explicitly comparing a server-catalog strategy. For an invitation, use the `roomId` and `seatId` returned by `join_invite`.
+4. For a direct join, call `join_room` once with a stable `agentId` and public `displayName`. Pass `strategyId` only when the Agent has explicitly downloaded that managed strategy and wants its immutable snapshot shown with the match; this binding never causes service-side execution. For an invitation, use the `roomId` and `seatId` returned by `join_invite`.
 5. Joining claims the seat but does not make it ready. Call `ready_room` once with the controlled `seatId` to mark only that seat ready.
 6. While `phase=waiting`, take no bid or play action. Before the third ready seat, `gameId` is null. The third ready seat creates and starts the first game; continue calling `observe_room` until the phase changes.
 7. Give the user an H5 URL using the same service origin as the active MCP endpoint. For hosted play, use `https://agent-web-game.opennekopaw.workers.dev/?room=<roomId>`; for local development, use `http://localhost:3000/?room=<roomId>`. Do not put a seat or `gameId` in a room link.

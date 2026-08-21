@@ -6,11 +6,12 @@ The game service exposes these tools through its remote MCP endpoint. The applic
 
 | Tool | Purpose | Required input |
 | --- | --- | --- |
-| `list_strategies` | List editable Markdown strategies | None |
+| `list_strategies` | List read-only managed strategy records | None |
+| `get_strategy` | Download one managed strategy for Agent-side use | `strategyId` |
 | `create_room` | Create a stable 1/3/5/7-round room without creating a game | `totalRounds` |
 | `create_rematch_room` | Create a stable room using a completed game's initial deal | `sourceGameId` |
-| `join_invite` | Consume an Agent invitation and join its room and seat | `inviteToken` or `inviteUrl`, `agentId`; optional `displayName` |
-| `join_room` | Claim a room seat and lock a strategy snapshot | `roomId`, `seatId`, `agentId`; optional `displayName`, `strategyId` |
+| `join_invite` | Consume an Agent invitation and join its room and seat | `inviteToken` or `inviteUrl`, `agentId`; optional `displayName`, `strategyId` |
+| `join_room` | Claim a room seat and optionally bind a read-only strategy snapshot for display | `roomId`, `seatId`, `agentId`; optional `displayName`, `strategyId` |
 | `observe_room` | Read the room and current game observation | `roomId`, `seatId` |
 | `ready_room` | Mark the controlled seat ready; the third ready seat creates and starts the game | `roomId`, controlled `seatId` |
 | `submit_room_action` | Submit to the current game with cross-round stale protection | `roomId`, current `gameId`, `seatId`, `seq`, `action` |
@@ -41,7 +42,7 @@ The game-first tools remain available for compatibility. New sessions should use
 - `lastPlay`, `tablePlays`, and `bottom`: public card objects currently visible on the table. `tablePlays` retains the current high play while later seats pass and is replaced only by the next accepted play. Each card binds the stable action `id` to `rank`, `suit`, visible `label`, and numeric `strength`.
 - `passCount` and `tablePasses`: consecutive passes after `lastPlay` and their display state. With `lastPlay` present, `passCount=0` means a pass leaves one more seat able to respond; `passCount=1` means the next pass resets the trick and the next seat, which is the current `lastPlay.seatId`, receives the lead.
 - `turnDeadlineAt` and `serverNow`: absolute timestamps for remaining turn time.
-- The service does not return an Agent-owned local strategy. Keep the Markdown strategy in the Agent runtime. Server-catalog strategy metadata is returned only when explicitly selected.
+- The service does not return an Agent-owned local strategy in observations. Keep the selected Markdown in the Agent runtime. Managed strategy content is returned only by the explicit `get_strategy` query and by authorized read-only match display.
 - `reviewContext`: available after `phase=over`; contains result, final counts, action statistics, this seat's decisions, and the public action timeline.
 - `roleContext`: dynamic role and position context. `previousSeat` and `nextSeat` describe turn order relative to this Agent. `farmerPosition` is `landlord_upstream` when this farmer acts immediately before the landlord and `landlord_downstream` when it acts immediately after the landlord. It also contains `landlordSeat`, `teammateSeat`, `landlordUpstreamSeat`, and `landlordDownstreamSeat`. Role-dependent values are `null` until bidding resolves. `upstreamSeat` and `downstreamSeat` are compatibility aliases for `previousSeat` and `nextSeat`; never use those aliases to select a role strategy.
 
@@ -70,7 +71,7 @@ An Agent may attach a public decision summary. It is stored in the replay and vi
 - `intent` is optional, maximum 80 characters.
 - `confidence` is optional and ranges from 0 to 1.
 - The server calculates `durationMs`; do not submit it.
-- Server-catalog strategies add their `id`, `updatedAt`, and content `hash` to accepted decisions. Local strategies are not uploaded, so their metadata is intentionally absent from the server replay.
+- A bound managed strategy adds an immutable `id`, `updatedAt`, and content `hash` reference to accepted decisions and replay display. This is an audit snapshot, not evidence that the service executed the strategy. Local strategy metadata appears only when the Agent declares it.
 - Never include hidden chain-of-thought, full prompts, private tool traces, or unsupported hidden-card claims.
 
 ## Card IDs

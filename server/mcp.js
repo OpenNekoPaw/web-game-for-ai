@@ -5,7 +5,6 @@ import {
   createRematch,
   createRematchRoom,
   createRoom,
-  getStrategies,
   getRoom,
   joinAgentInvite,
   joinMatch,
@@ -48,7 +47,11 @@ const agentMetadataSchema = {
 };
 
 export const MCP_TOOLS = [
-  tool('list_strategies', 'List optional server-catalog strategies. Local strategy files remain with the Agent.', {}),
+  tool('list_strategies', 'List read-only managed strategies available for Agent download and match display.', {}),
+  tool('get_strategy', 'Download one managed strategy for local Agent-side use. The game service never executes it.', {
+    properties: { strategyId: { type: 'string', minLength: 1, maxLength: 120 } },
+    required: ['strategyId'], additionalProperties: false
+  }),
   tool('create_room', 'Create a stable room. No gameId exists until all three joined seats are ready.', {
     properties: { totalRounds: { type: 'integer', enum: [1, 3, 5, 7] }, ...roomAccessProperties }, additionalProperties: false
   }),
@@ -59,7 +62,7 @@ export const MCP_TOOLS = [
     properties: {
       roomId: { type: 'string' }, seatId: { type: 'integer', minimum: 0, maximum: 2 },
       agentId: { type: 'string' }, displayName: { type: 'string', minLength: 1, maxLength: 40 },
-      strategyMode: { type: 'string', enum: ['local', 'server'] }, strategyId: { type: 'string' }, agentMetadata: agentMetadataSchema
+      strategyId: { type: 'string', description: 'Optional managed strategy reference for read-only match display.' }, agentMetadata: agentMetadataSchema
     }, required: ['roomId', 'seatId', 'agentId'], additionalProperties: false
   }),
   tool('observe_room', 'Observe the room and its current game. currentGameId changes between rounds while roomId stays stable.', {
@@ -93,14 +96,15 @@ export const MCP_TOOLS = [
       inviteUrl: { type: 'string', description: 'Full Agent invitation URL; the final path segment is used as the token.' },
       agentId: { type: 'string', minLength: 1, maxLength: 120 },
       displayName: { type: 'string', minLength: 1, maxLength: 40 },
+      strategyId: { type: 'string', description: 'Optional managed strategy reference for read-only match display.' },
       agentMetadata: agentMetadataSchema
     }, required: ['agentId'], additionalProperties: false
   }),
-  tool('join_game', 'Claim or reconnect to one Agent seat. Use strategyMode=local when the Agent owns its strategy.', {
+  tool('join_game', 'Claim or reconnect to one Agent seat. Strategy execution always remains with the Agent.', {
     properties: {
       gameId: { type: 'string' }, seatId: { type: 'integer', minimum: 0, maximum: 2 },
       agentId: { type: 'string' }, displayName: { type: 'string', minLength: 1, maxLength: 40 },
-      strategyMode: { type: 'string', enum: ['local', 'server'] }, strategyId: { type: 'string' },
+      strategyId: { type: 'string', description: 'Optional managed strategy reference for read-only match display.' },
       agentMetadata: agentMetadataSchema
     }, required: ['gameId', 'seatId', 'agentId'], additionalProperties: false
   }),
@@ -136,7 +140,7 @@ function tool(name, description, inputSchema) {
   return { name, description, inputSchema: { type: 'object', ...inputSchema } };
 }
 
-export async function handleMcpMessage(message) {
+export async function handleMcpMessage(message, options = {}) {
   if (!message || typeof message !== 'object') return rpcError(null, -32600, 'Invalid Request');
   if (message.method === 'notifications/initialized') return null;
   if (message.method === 'ping') return rpcResult(message.id, {});
@@ -150,7 +154,7 @@ export async function handleMcpMessage(message) {
   if (message.method === 'tools/list') return rpcResult(message.id, { tools: MCP_TOOLS });
   if (message.method === 'tools/call') {
     try {
-      return rpcResult(message.id, await callTool(message.params?.name, message.params?.arguments || {}));
+      return rpcResult(message.id, await callTool(message.params?.name, message.params?.arguments || {}, options.strategyCatalog));
     } catch (error) {
       return rpcResult(message.id, { ...text({ ok: false, error: error.message }), isError: true });
     }
@@ -158,15 +162,15 @@ export async function handleMcpMessage(message) {
   return rpcError(message.id ?? null, -32601, 'Method not found');
 }
 
-async function callTool(name, args) {
+async function callTool(name, args, strategyCatalog) {
   switch (name) {
-    case 'list_strategies': return text({ protocol: 'agent-game.v1', ...getStrategies() });
+    case 'list_strategies': return text({ protocol: 'agent-game.v1', ...requireStrategyCatalog(strategyCatalog).listStrategies() });
+    case 'get_strategy': return text({ protocol: 'agent-game.v1', strategy: requireStrategyCatalog(strategyCatalog).getStrategy(args.strategyId) });
     case 'create_room': return text(createRoom(args));
     case 'create_rematch_room': return text(createRematchRoom(args.sourceGameId, args.replayAccessToken));
     case 'join_room': {
-      const strategyMode = args.strategyMode || 'local';
-      const strategyId = strategyMode === 'server' ? args.strategyId : undefined;
-      return text(joinRoomAgent(args.roomId, args.seatId, args.agentId, strategyId, args.displayName, { strategyMode, agentMetadata:args.agentMetadata }));
+      const strategySnapshot = args.strategyId ? requireStrategyCatalog(strategyCatalog).getStrategy(args.strategyId) : undefined;
+      return text(joinRoomAgent(args.roomId, args.seatId, args.agentId, args.displayName, { strategySnapshot, agentMetadata:args.agentMetadata }));
     }
     case 'observe_room': return text(observeRoom(args.roomId, args.seatId));
     case 'ready_room': return text(readyRoom(args.roomId, args.seatId));
@@ -183,12 +187,12 @@ async function callTool(name, args) {
     case 'create_competition': return text(createCompetition(args));
     case 'join_invite': {
       const token = inviteToken(args.inviteToken || args.inviteUrl);
-      return text(joinAgentInvite(token, args.agentId, args.displayName, args.agentMetadata));
+      const strategySnapshot = args.strategyId ? requireStrategyCatalog(strategyCatalog).getStrategy(args.strategyId) : undefined;
+      return text(joinAgentInvite(token, args.agentId, args.displayName, args.agentMetadata, strategySnapshot));
     }
     case 'join_game': {
-      const strategyMode = args.strategyMode || 'local';
-      const strategyId = strategyMode === 'server' ? args.strategyId : undefined;
-      return text(joinMatch(args.gameId, args.seatId, args.agentId, strategyId, args.displayName, { strategyMode, agentMetadata: args.agentMetadata }));
+      const strategySnapshot = args.strategyId ? requireStrategyCatalog(strategyCatalog).getStrategy(args.strategyId) : undefined;
+      return text(joinMatch(args.gameId, args.seatId, args.agentId, args.displayName, { strategySnapshot, agentMetadata: args.agentMetadata }));
     }
     case 'observe_game': return text(observeMatch(args.gameId, args.seatId));
     case 'start_game': return text(startMatch(args.gameId, args.seatId));
@@ -198,6 +202,11 @@ async function callTool(name, args) {
     case 'submit_competition_review': return text(submitCompetitionReview(args.competitionId, args.seatId, args.review));
     default: throw new Error('tool_not_found');
   }
+}
+
+function requireStrategyCatalog(strategyCatalog) {
+  if (!strategyCatalog?.listStrategies || !strategyCatalog?.getStrategy) throw new Error('strategy_catalog_unavailable');
+  return strategyCatalog;
 }
 
 function inviteToken(value) {

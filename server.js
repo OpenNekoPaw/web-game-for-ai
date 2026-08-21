@@ -1,11 +1,11 @@
 import http from 'node:http';
-import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
-import { assertMatchRoomOwner, assertRoomOwnerById, createCompetition, createMatch, createMatchInvite, createRematch, createRematchRoom, createRoom, createRoomInvite, getAuthorizedReplay, getMatch, getMatchStrategies, getRoom, getRoomStrategies, getStrategies, joinAgentInvite, joinAvailablePlayerMatch, joinAvailableRoomPlayer, joinMatch, joinPlayerInvite, joinPlayerMatch, joinRoomAgent, listAccessibleReplays, observeCompetition, observeMatch, observeRoom, readyRoom, removeDisconnectedPlayer, removeDisconnectedRoomPlayer, resolveMatchInvite, startMatch, submitCompetitionReview, submitMatchAction, submitMatchReview, submitRoomAction, tickMatches } from './game/store.js';
+import { assertMatchRoomOwner, assertRoomOwnerById, createCompetition, createMatch, createMatchInvite, createRematch, createRematchRoom, createRoom, createRoomInvite, getAuthorizedReplay, getMatch, getMatchStrategies, getRoom, getRoomStrategies, joinAgentInvite, joinAvailablePlayerMatch, joinAvailableRoomPlayer, joinMatch, joinPlayerInvite, joinPlayerMatch, joinRoomAgent, listAccessibleReplays, observeCompetition, observeMatch, observeRoom, readyRoom, removeDisconnectedPlayer, removeDisconnectedRoomPlayer, resolveMatchInvite, startMatch, submitCompetitionReview, submitMatchAction, submitMatchReview, submitRoomAction, tickMatches } from './game/store.js';
 import { assetsDirectory } from './game/runtime-paths.js';
 import { browserPlayerResult, browserSessionCookie, browserSessionToken } from './server/browser-session.js';
 import { handleMcpMessage } from './server/mcp.js';
+import * as strategyCatalog from './server/strategy-catalog-node.js';
 
 const mime = { '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.css':'text/css; charset=utf-8' };
 const json = (res, code, body, headers = {}) => { res.writeHead(code, {'content-type':'application/json; charset=utf-8','access-control-allow-origin':'*',...headers}); res.end(JSON.stringify(body)); };
@@ -29,7 +29,7 @@ const mcp = async (req, res) => {
     }
     throw error;
   }
-  const response = await handleMcpMessage(message);
+  const response = await handleMcpMessage(message, { strategyCatalog });
   if (!response) { res.writeHead(202, { 'access-control-allow-origin': '*' }); return res.end(); }
   return json(res, 200, response);
 };
@@ -41,12 +41,12 @@ const handleRequest = async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/') { const data = await readFile(join(assetsDirectory, 'public/index.html')); res.writeHead(200, {'content-type': mime['.html']}); return res.end(data); }
     if (req.method === 'GET' && url.pathname.startsWith('/public/')) { const file = join(assetsDirectory, url.pathname); const data = await readFile(file); res.writeHead(200, {'content-type': mime[extname(file)] || 'application/octet-stream'}); return res.end(data); }
     if (req.method === 'GET' && ['/app.js', '/cards.css', '/styles.css', '/header.css', '/lifecycle.css', '/cards-adapter.css'].includes(url.pathname)) { const file = join(assetsDirectory, 'public', url.pathname.slice(1)); const data = await readFile(file); res.writeHead(200, {'content-type': mime[extname(file)] || 'application/octet-stream'}); return res.end(data); }
-    if (req.method === 'GET' && url.pathname === '/api/agent-guide') {
-      const markdown = await readFile(join(assetsDirectory, '.agents', 'skills', 'play-doudizhu', 'SKILL.md'), 'utf8');
-      const hash = createHash('sha256').update(markdown).digest('hex');
-      return json(res, 200, { protocol:'agent-game.v1', format:'agentskills', fileName:'SKILL.md', hash, markdown });
+    if (req.method === 'GET' && url.pathname === '/agent/v1/strategies') return json(res, 200, { protocol:'agent-game.v1', ...strategyCatalog.listStrategies() });
+    const managedStrategy = url.pathname.match(/^\/agent\/v1\/strategies\/([^/]+)$/);
+    if (req.method === 'GET' && managedStrategy) {
+      try { return json(res, 200, { protocol:'agent-game.v1', strategy:strategyCatalog.getStrategy(decodeURIComponent(managedStrategy[1])) }); }
+      catch (error) { return json(res, error.message === 'strategy_not_found' ? 404 : 400, { error:error.message }); }
     }
-    if (req.method === 'GET' && url.pathname === '/agent/v1/strategies') return json(res, 200, { protocol:'agent-game.v1', ...getStrategies() });
     if (req.method === 'GET' && url.pathname === '/api/replays') return json(res, 200, listAccessibleReplays({ limit:url.searchParams.get('limit'), offset:url.searchParams.get('offset'), status:url.searchParams.get('status'), replayAccessToken:replayAccess(req) }));
     if (req.method === 'POST' && (url.pathname === '/api/rooms' || url.pathname === '/agent/v1/rooms')) return json(res, 201, createRoom(await body(req)));
     const agentRoom = url.pathname.match(/^\/agent\/v1\/rooms\/([^/]+)\/(join|observe|ready|actions|review)$/);
@@ -54,7 +54,7 @@ const handleRequest = async (req, res) => {
       const data = req.method === 'POST' ? await body(req) : {};
       const seatId = Number(req.method === 'GET' ? url.searchParams.get('seatId') : data.seatId);
       try {
-        if (agentRoom[2] === 'join' && req.method === 'POST') return json(res, 200, joinRoomAgent(agentRoom[1], seatId, String(data.agentId || 'anonymous'), data.strategyId, data.displayName, { strategyMode:data.strategyMode, agentMetadata:data.agentMetadata }));
+        if (agentRoom[2] === 'join' && req.method === 'POST') return json(res, 200, joinRoomAgent(agentRoom[1], seatId, String(data.agentId || 'anonymous'), data.displayName, { strategySnapshot:data.strategyId ? strategyCatalog.getStrategy(data.strategyId) : undefined, agentMetadata:data.agentMetadata }));
         if (agentRoom[2] === 'observe' && req.method === 'GET') return json(res, 200, observeRoom(agentRoom[1], seatId));
         if (agentRoom[2] === 'ready' && req.method === 'POST') return json(res, 200, readyRoom(agentRoom[1], seatId));
         if (agentRoom[2] === 'actions' && req.method === 'POST') return json(res, 200, submitRoomAction(agentRoom[1], data.gameId, seatId, data.action, data.seq, {source:'agent',decision:data.decision}));
@@ -87,7 +87,7 @@ const handleRequest = async (req, res) => {
     if (agentInvite) {
       try {
         if (req.method === 'GET' && !agentInvite[2]) return json(res, 200, resolveMatchInvite(agentInvite[1]));
-        if (req.method === 'POST' && agentInvite[2] === 'join') { const data = await body(req); return json(res, 200, joinAgentInvite(agentInvite[1], data.agentId, data.displayName, data.agentMetadata)); }
+        if (req.method === 'POST' && agentInvite[2] === 'join') { const data = await body(req); return json(res, 200, joinAgentInvite(agentInvite[1], data.agentId, data.displayName, data.agentMetadata, data.strategyId ? strategyCatalog.getStrategy(data.strategyId) : undefined)); }
       } catch (error) { return json(res, error.message === 'invite_not_found' ? 404 : 400, { protocol:'agent-game.v1', ok:false, error:error.message }); }
     }
     if (req.method === 'POST' && (url.pathname === '/api/competitions' || url.pathname === '/agent/v1/competitions')) return json(res, 201, createCompetition(await body(req)));
@@ -120,7 +120,7 @@ const handleRequest = async (req, res) => {
       const data = req.method === 'POST' ? await body(req) : {};
       const seatId = Number(req.method === 'GET' ? url.searchParams.get('seatId') : data.seatId);
       try {
-        if (agentMatch[2] === 'join' && req.method === 'POST') return json(res, 200, joinMatch(agentMatch[1], seatId, String(data.agentId || 'anonymous'), data.strategyId, data.displayName, { strategyMode:data.strategyMode, agentMetadata:data.agentMetadata }));
+        if (agentMatch[2] === 'join' && req.method === 'POST') return json(res, 200, joinMatch(agentMatch[1], seatId, String(data.agentId || 'anonymous'), data.displayName, { strategySnapshot:data.strategyId ? strategyCatalog.getStrategy(data.strategyId) : undefined, agentMetadata:data.agentMetadata }));
         if (agentMatch[2] === 'observe' && req.method === 'GET') return json(res, 200, observeMatch(agentMatch[1], seatId));
         if (agentMatch[2] === 'start' && req.method === 'POST') return json(res, 200, startMatch(agentMatch[1], seatId));
         if (agentMatch[2] === 'actions' && req.method === 'POST') return json(res, 200, submitMatchAction(agentMatch[1], seatId, data.action, data.seq, { source:'agent', decision:data.decision }));

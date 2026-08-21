@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 
-test('server MCP endpoint exposes game tools and keeps local strategy out of results', async (t) => {
+test('server MCP exposes read-only strategy queries without injecting strategy content into play observations', async (t) => {
   const port = 31917;
   const child = spawn(process.execPath, ['server.js'], {
     env: { ...process.env, PORT: String(port), REPLAY_PERSISTENCE: 'memory' },
@@ -17,7 +17,12 @@ test('server MCP endpoint exposes game tools and keeps local strategy out of res
   assert.equal(initialize.result.serverInfo.name, 'agent-game-ddz');
   const listed = await callMcp(port, 'tools/list', {});
   assert.ok(listed.result.tools.some((tool) => tool.name === 'join_invite'));
+  assert.ok(listed.result.tools.some((tool) => tool.name === 'get_strategy'));
   assert.ok(!listed.result.tools.some((tool) => tool.name === 'get_local_strategy'));
+
+  const downloaded = await callMcp(port, 'tools/call', { name: 'get_strategy', arguments: { strategyId: 'default' } });
+  assert.equal(downloaded.result.structuredContent.strategy.id, 'default');
+  assert.match(downloaded.result.structuredContent.strategy.markdown, /^---\n/);
 
   const created = await callMcp(port, 'tools/call', { name: 'create_game', arguments: {} });
   const game = created.result.structuredContent;
@@ -29,7 +34,17 @@ test('server MCP endpoint exposes game tools and keeps local strategy out of res
   const joined = await callMcp(port, 'tools/call', { name: 'join_invite', arguments: { inviteToken: invite.token, agentId: 'mcp-agent-a' } });
   const joinedState = joined.result.structuredContent;
   assert.equal(joinedState.seatControllers[0].type, 'agent');
-  assert.equal(joinedState.strategy, null);
+  assert.equal(joinedState.strategy, undefined);
+
+  const managedJoin = await callMcp(port, 'tools/call', { name: 'join_game', arguments: {
+    gameId: game.gameId, seatId: 1, agentId: 'mcp-agent-b', strategyId: 'default'
+  } });
+  assert.equal(managedJoin.result.structuredContent.strategy, undefined);
+  const strategyView = await fetch(`http://127.0.0.1:${port}/api/games/${game.gameId}/strategies?view=global`, {
+    headers: { 'x-room-owner-token': game.roomOwnerToken }
+  }).then((response) => response.json());
+  assert.equal(strategyView.participants[1].strategy.id, 'default');
+  assert.match(strategyView.participants[1].strategy.markdown, /^---\n/);
 });
 
 test('server MCP endpoint rejects malformed JSON without crashing', async (t) => {

@@ -5,28 +5,28 @@ import { createCompetition, createMatch, getMatch, joinMatch, joinPlayerMatch, o
 test('seat controllers expose display names without replacing stable ids', () => {
   const game = createMatch();
 
-  joinMatch(game.gameId, 0, 'codex-seat-a', 'default', '策略 Agent A');
-  joinMatch(game.gameId, 1, 'codex-seat-b', 'default');
+  joinMatch(game.gameId, 0, 'codex-seat-a', '策略 Agent A');
+  joinMatch(game.gameId, 1, 'codex-seat-b');
   joinPlayerMatch(game.gameId, 2, 'local-player-id', '本地玩家 C');
 
   const state = observeMatch(game.gameId, 0);
-  assert.deepEqual(state.seatControllers[0], { type: 'agent', id: 'codex-seat-a', displayName: '策略 Agent A', strategyMode: 'server' });
-  assert.deepEqual(state.seatControllers[1], { type: 'agent', id: 'codex-seat-b', displayName: 'codex-seat-b', strategyMode: 'server' });
+  assert.deepEqual(state.seatControllers[0], { type: 'agent', id: 'codex-seat-a', displayName: '策略 Agent A' });
+  assert.deepEqual(state.seatControllers[1], { type: 'agent', id: 'codex-seat-b', displayName: 'codex-seat-b' });
   assert.deepEqual(state.seatControllers[2], { type: 'player', id: 'local-player-id', displayName: '本地玩家 C' });
 });
 
 test('display names reject empty or oversized values', () => {
   const game = createMatch();
-  assert.throws(() => joinMatch(game.gameId, 0, 'agent-a', 'default', '   '), /invalid_display_name/);
+  assert.throws(() => joinMatch(game.gameId, 0, 'agent-a', '   '), /invalid_display_name/);
   assert.throws(() => joinPlayerMatch(game.gameId, 1, 'player-b', 'x'.repeat(41)), /invalid_display_name/);
 });
 
 test('display names survive a competition round transition', () => {
   const competition = createCompetition({ totalRounds: 3 });
   const game = getMatch(competition.currentGameId);
-  joinMatch(game.gameId, 0, 'agent-a', 'default', 'Codex A');
-  joinMatch(game.gameId, 1, 'agent-b', 'default', 'Codex B');
-  joinMatch(game.gameId, 2, 'agent-c', 'default', 'Codex C');
+  joinMatch(game.gameId, 0, 'agent-a', 'Codex A');
+  joinMatch(game.gameId, 1, 'agent-b', 'Codex B');
+  joinMatch(game.gameId, 2, 'agent-c', 'Codex C');
   game.phase = 'over';
 
   const review = {
