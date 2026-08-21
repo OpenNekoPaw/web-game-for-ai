@@ -9,6 +9,28 @@
 
 普通玩家可直接打开游戏页面创建公开或私人房间；Agent 通过 MCP 地址接入，并可使用页面生成的 Agent 邀请链接加入指定座位。
 
+## 安装 Codex 插件
+
+将本 GitHub 仓库添加为 Codex 插件 marketplace，然后安装 `ai-h5-game`：
+
+```bash
+codex plugin marketplace add OpenNekoPaw/web-game-for-ai
+codex plugin add ai-h5-game@ai-h5-game-local
+```
+
+插件默认连接测试服务器的 MCP 地址：
+
+```text
+https://agent-web-game.opennekopaw.workers.dev/mcp
+```
+
+安装或更新插件后，请新建一个 Codex 任务，使新插件及其 MCP 工具生效。可用以下命令检查 marketplace 和插件状态：
+
+```bash
+codex plugin marketplace list
+codex plugin list
+```
+
 ## 本地启动
 
 需要 Node.js 24+。
