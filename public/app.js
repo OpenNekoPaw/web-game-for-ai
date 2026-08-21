@@ -3,9 +3,10 @@ const replayGameId = params.get('replay');
 const replayMode = Boolean(replayGameId);
 const replayReturn = params.get('return');
 const inviteToken = params.get('invite');
+let roomId = params.get('room');
 let gameId = params.get('game');
 let competitionId = params.get('competition');
-let setupConfirmed = Boolean(gameId || competitionId || inviteToken);
+let setupConfirmed = Boolean(roomId || gameId || competitionId || inviteToken);
 let selectedAccessMode = 'open';
 let seatJoinInviteToken = null;
 let seat = normalizeSeat(params.get('seat'));
@@ -53,7 +54,8 @@ const post = async (path, data = {}, headers = {}) => {
 
 function normalizeSeat(value) { const parsed = Number(value); return [0, 1, 2].includes(parsed) ? parsed : 0; }
 function normalizeView(value) { return value === 'global' ? 'global' : 'player'; }
-function isRoomOwner() { return Boolean(storedRoomOwnerToken(gameId)); }
+function activeSessionId() { return roomId || competitionId || gameId; }
+function isRoomOwner() { return Boolean(storedRoomOwnerToken(roomId || gameId)); }
 function syncUrl() {
   const next = new URL(location.href);
   next.searchParams.delete('seat');
@@ -63,11 +65,18 @@ function syncUrl() {
   next.searchParams.delete('invite');
   if (replayMode) {
     next.searchParams.set('replay', replayGameId);
-    next.searchParams.delete('game'); next.searchParams.delete('competition');
+    next.searchParams.delete('room'); next.searchParams.delete('game'); next.searchParams.delete('competition');
   } else {
     next.searchParams.delete('replay');
-    if (gameId) next.searchParams.set('game', gameId); else next.searchParams.delete('game');
-    if (competitionId) next.searchParams.set('competition', competitionId); else next.searchParams.delete('competition');
+    if (roomId) {
+      next.searchParams.set('room', roomId);
+      next.searchParams.delete('game');
+      next.searchParams.delete('competition');
+    } else {
+      next.searchParams.delete('room');
+      if (gameId) next.searchParams.set('game', gameId); else next.searchParams.delete('game');
+      if (competitionId) next.searchParams.set('competition', competitionId); else next.searchParams.delete('competition');
+    }
   }
   history.replaceState(null, '', next);
 }
@@ -107,7 +116,7 @@ function setInviteMenu(open) {
 function renderInviteMenu() {
   const waiting = state?.phase === 'waiting';
   document.querySelectorAll('[data-invite-type][data-invite-seat]').forEach((button) => {
-    if (button.dataset.inviteType === 'spectator') { button.disabled = !gameId; return; }
+    if (button.dataset.inviteType === 'spectator') { button.disabled = !roomId && !gameId; return; }
     if (button.dataset.inviteType === 'player' && button.dataset.inviteSeat === 'auto') {
       const roomFull = [0, 1, 2].every((seatId) => Boolean(state?.seatControllers?.[seatId]));
       button.disabled = !waiting || roomFull;
@@ -121,11 +130,12 @@ function renderInviteMenu() {
 }
 
 async function createInvite(inviteType, seatId) {
-  if (!gameId || !setupConfirmed) return showMessage('请先确认比赛局数', true);
+  if ((!roomId && !gameId) || !setupConfirmed) return showMessage('请先确认比赛局数', true);
   if (!isRoomOwner()) return showMessage('只有房主可以创建邀请', true);
   try {
     const payload = { inviteType, ...(seatId === null ? {} : { seatId }) };
-    const { response, data } = await post(`/api/games/${encodeURIComponent(gameId)}/invites`, payload, { 'x-room-owner-token': storedRoomOwnerToken(gameId) });
+    const base = roomId ? `/api/rooms/${encodeURIComponent(roomId)}` : `/api/games/${encodeURIComponent(gameId)}`;
+    const { response, data } = await post(`${base}/invites`, payload, { 'x-room-owner-token': storedRoomOwnerToken(roomId || gameId) });
     if (!response.ok) throw new Error(data.error || 'invite_failed');
     const url = inviteType === 'agent'
       ? new URL(`/agent/v1/invites/${encodeURIComponent(data.token)}`, location.origin)
@@ -149,10 +159,12 @@ async function resolveInvite() {
   if (!response.ok) throw new Error(data.error || 'invite_not_found');
   if (!['player', 'spectator'].includes(data.inviteType)) throw new Error('invite_type_mismatch');
   activeInvite = data;
-  sessionStorage.setItem(`ddz-active-invite:${data.gameId}`, JSON.stringify(data));
+  if (data.roomId) sessionStorage.setItem(`ddz-active-invite:${data.roomId}`, JSON.stringify(data));
+  if (data.gameId) sessionStorage.setItem(`ddz-active-invite:${data.gameId}`, JSON.stringify(data));
   if (data.competitionId) sessionStorage.setItem(`ddz-active-invite:${data.competitionId}`, JSON.stringify(data));
   setupConfirmed = true;
-  gameId = data.gameId;
+  roomId = data.roomId || null;
+  gameId = data.gameId || null;
   competitionId = data.competitionId || null;
   if (Number.isInteger(data.seatId)) seat = normalizeSeat(data.seatId);
   controlledSeat = seat;
@@ -161,13 +173,13 @@ async function resolveInvite() {
   syncUrl();
 }
 
-function restoreActiveInvite(targetGameId = gameId) {
-  if (!targetGameId || activeInvite) return;
+function restoreActiveInvite(targetId = activeSessionId()) {
+  if (!targetId || activeInvite) return;
   try {
-    const stored = JSON.parse(sessionStorage.getItem(`ddz-active-invite:${competitionId || targetGameId}`) || sessionStorage.getItem(`ddz-active-invite:${targetGameId}`) || 'null');
-    if ((stored?.gameId === targetGameId || stored?.competitionId === competitionId) && typeof stored.token === 'string') activeInvite = stored;
+    const stored = JSON.parse(sessionStorage.getItem(`ddz-active-invite:${targetId}`) || 'null');
+    if ((stored?.roomId === roomId || stored?.gameId === gameId || stored?.competitionId === competitionId) && typeof stored.token === 'string') activeInvite = stored;
   } catch {
-    sessionStorage.removeItem(`ddz-active-invite:${targetGameId}`);
+    sessionStorage.removeItem(`ddz-active-invite:${targetId}`);
   }
 }
 
@@ -296,15 +308,16 @@ async function copyText(value) {
 async function create(rounds = 1, options = {}) {
   try {
     const totalRounds = [3, 5, 7].includes(Number(rounds)) ? Number(rounds) : 1;
-    const accessMode = ['open', 'invite_only', 'private'].includes(options.accessMode) ? options.accessMode : 'open';
-    const { response, data } = totalRounds === 1 ? await post('/api/games', { accessMode }) : await post('/api/competitions', { totalRounds, accessMode });
+    const accessMode = options.accessMode === 'invite_only' ? 'private' : ['open', 'private'].includes(options.accessMode) ? options.accessMode : 'open';
+    const { response, data } = await post('/api/rooms', { totalRounds, accessMode });
     if (!response.ok) throw new Error(data.error || 'create_failed');
     activeInvite = null;
-    gameId = totalRounds === 1 ? data.gameId : data.currentGameId;
-    competitionId = totalRounds === 1 ? null : data.competitionId;
-    rememberReplayAccess(data.replayAccessToken, gameId);
-    rememberRoomOwner(data.roomOwnerToken, gameId);
-    setupConfirmed = options.confirmed === true || totalRounds > 1;
+    roomId = data.roomId;
+    gameId = data.gameId || null;
+    competitionId = data.competitionId || null;
+    rememberReplayAccess(data.replayAccessToken, roomId);
+    rememberRoomOwner(data.roomOwnerToken, roomId);
+    setupConfirmed = options.confirmed === true;
     selectedRounds = totalRounds;
     selectedAccessMode = accessMode;
     controlRequested = false;
@@ -325,9 +338,10 @@ async function confirmMatchSetup() {
 }
 
 async function ensurePlayerJoined() {
-  if (replayMode || !controlRequested || !gameId || playerJoinAttempt === gameId) return;
-  playerJoinAttempt = gameId;
-  const sessionId = competitionId || gameId;
+  const targetId = activeSessionId();
+  if (replayMode || !controlRequested || !targetId || playerJoinAttempt === targetId) return;
+  playerJoinAttempt = targetId;
+  const sessionId = targetId;
   const joiningAutomatically = autoJoinRequested || (activeInvite?.inviteType === 'player' && activeInvite.seatMode === 'auto' && !Number.isInteger(activeInvite.seatId));
   const playerId = activeInvite?.inviteType === 'player'
     ? localInvitePlayerId(activeInvite.token)
@@ -340,7 +354,7 @@ async function ensurePlayerJoined() {
     ? `/api/invites/${encodeURIComponent(activeInvite.token)}/join`
     : seatJoinInviteToken
       ? `/api/invites/${encodeURIComponent(seatJoinInviteToken)}/join`
-    : `/api/games/${gameId}/join`;
+    : roomId ? `/api/rooms/${roomId}/join` : `/api/games/${gameId}/join`;
   const existingSeatToken = storedSeatSession(sessionId, controlledSeat)?.token;
   const { response, data } = await post(path, { ...(joiningAutomatically ? {} : { seatId: controlledSeat }), playerId, displayName }, existingSeatToken ? { 'x-seat-session-token': existingSeatToken } : {});
   if (response.ok) {
@@ -353,9 +367,10 @@ async function ensurePlayerJoined() {
     }
     if (data.invite && activeInvite) {
       activeInvite = { ...activeInvite, ...data.invite };
-      sessionStorage.setItem(`ddz-active-invite:${competitionId || gameId}`, JSON.stringify(activeInvite));
+      sessionStorage.setItem(`ddz-active-invite:${activeSessionId()}`, JSON.stringify(activeInvite));
     }
-    rememberReplayAccess(data.replayAccessToken, gameId);
+    if (data.gameId) gameId = data.gameId;
+    rememberReplayAccess(data.replayAccessToken, roomId || gameId);
     controlActive = true;
     autoJoinRequested = false;
     seatJoinInviteToken = null;
@@ -367,7 +382,7 @@ async function ensurePlayerJoined() {
     forgetSeatSession(sessionId, controlledSeat);
     controlRequested = false;
     autoJoinRequested = false;
-    playerJoinAttempt = gameId;
+    playerJoinAttempt = targetId;
     syncUrl();
     showMessage('当前设备的座位控制权已失效，可使用重连码恢复', true);
     return;
@@ -431,7 +446,7 @@ function forgetSeatSession(sessionId, seatId) {
   }
 }
 
-function restoreStoredControlRequest(sessionId = competitionId || gameId) {
+function restoreStoredControlRequest(sessionId = activeSessionId()) {
   if (!sessionId || controlRequested || controlActive) return false;
   const preferred = Number(localStorage.getItem(`ddz-active-seat:${sessionId}`));
   const seats = [preferred, 0, 1, 2].filter((value, index, values) => [0, 1, 2].includes(value) && values.indexOf(value) === index);
@@ -443,45 +458,45 @@ function restoreStoredControlRequest(sessionId = competitionId || gameId) {
   return true;
 }
 
-function seatSessionHeaders(sessionId = competitionId || gameId, seatId = controlledSeat) {
+function seatSessionHeaders(sessionId = activeSessionId(), seatId = controlledSeat) {
   if (!controlRequested && !controlActive) return {};
   const token = storedSeatSession(sessionId, seatId)?.token;
   return token ? { 'x-seat-session-token': token, 'x-seat-session-seat': String(seatId) } : {};
 }
 
 function observationHeaders(requestedSeat = seat) {
-  const headers = { ...seatSessionHeaders(competitionId || gameId, requestedSeat) };
-  const ownerToken = storedRoomOwnerToken(gameId);
+  const headers = { ...seatSessionHeaders(activeSessionId(), requestedSeat) };
+  const ownerToken = storedRoomOwnerToken(roomId || gameId);
   if (ownerToken) headers['x-room-owner-token'] = ownerToken;
   if (activeInvite?.token) headers['x-game-invite-token'] = activeInvite.token;
   return headers;
 }
 
-function rememberRoomOwner(token, targetGameId = gameId) {
+function rememberRoomOwner(token, targetGameId = roomId || gameId) {
   if (typeof token !== 'string') return;
   if (targetGameId) localStorage.setItem(`ddz-room-owner-token:${targetGameId}`, token);
   if (competitionId) localStorage.setItem(`ddz-room-owner-token:${competitionId}`, token);
 }
 
-function storedRoomOwnerToken(targetGameId = gameId) {
+function storedRoomOwnerToken(targetGameId = roomId || gameId) {
   return (targetGameId && localStorage.getItem(`ddz-room-owner-token:${targetGameId}`))
     || (competitionId && localStorage.getItem(`ddz-room-owner-token:${competitionId}`))
     || null;
 }
 
-function rememberReplayAccess(token, targetGameId = gameId) {
+function rememberReplayAccess(token, targetGameId = roomId || gameId) {
   if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{32,128}$/.test(token)) return;
   if (targetGameId) localStorage.setItem(`ddz-replay-access:${targetGameId}`, token);
   if (competitionId) localStorage.setItem(`ddz-replay-access:${competitionId}`, token);
 }
 
-function storedReplayAccess(targetGameId = gameId) {
+function storedReplayAccess(targetGameId = roomId || gameId) {
   return (targetGameId && localStorage.getItem(`ddz-replay-access:${targetGameId}`))
     || (competitionId && localStorage.getItem(`ddz-replay-access:${competitionId}`))
     || null;
 }
 
-function replayAccessHeaders(targetGameId = gameId) {
+function replayAccessHeaders(targetGameId = roomId || gameId) {
   const token = storedReplayAccess(targetGameId);
   return token ? { 'x-replay-access-token': token } : {};
 }
@@ -493,26 +508,27 @@ function storedPlayerId(sessionId, seatId) {
 
 function restoreLocalPlayerControl(matchState) {
   if (controlActive || controlRequested || !matchState?.seatControllers) return false;
-  const sessionId = competitionId || gameId;
+  const sessionId = activeSessionId();
   const recoveredSeat = Number(matchState.controlledSeat);
   if (!matchState.controlAuthorized || ![0, 1, 2].includes(recoveredSeat) || !storedSeatSession(sessionId, recoveredSeat)) return false;
   seat = recoveredSeat;
   controlledSeat = recoveredSeat;
   controlRequested = true;
   controlActive = true;
-  playerJoinAttempt = gameId;
+  playerJoinAttempt = activeSessionId();
   return true;
 }
 
 async function start() {
-  if (!gameId || !controlActive) return showMessage('请先加入一个玩家座位', true);
+  if ((!roomId && !gameId) || !controlActive) return showMessage('请先加入一个玩家座位', true);
   if (state?.readySeats?.includes(controlledSeat)) return;
-  try { const { response, data } = await post(`/api/games/${gameId}/start`, { seatId: controlledSeat }, seatSessionHeaders()); if (!response.ok) throw new Error(data.error || 'start_failed'); selected.clear(); await refresh(); }
+  const path = roomId ? `/api/rooms/${roomId}/ready` : `/api/games/${gameId}/start`;
+  try { const { response, data } = await post(path, { seatId: controlledSeat }, seatSessionHeaders()); if (!response.ok) throw new Error(data.error || 'start_failed'); if (data.gameId) gameId = data.gameId; selected.clear(); await refresh(); }
   catch (error) { showMessage(errorText(error.message), true); }
 }
 
 async function joinPlayerGame() {
-  if (!gameId || state?.phase !== 'waiting') return;
+  if ((!roomId && !gameId) || state?.phase !== 'waiting') return;
   controlRequested = true;
   controlActive = false;
   playerJoinAttempt = null;
@@ -522,7 +538,8 @@ async function joinPlayerGame() {
   try {
     if (state.accessMode !== 'open' && !activeInvite) {
       if (!isRoomOwner()) return showMessage('该房间需要玩家邀请链接', true);
-      const { response, data } = await post(`/api/games/${encodeURIComponent(gameId)}/invites`, { inviteType: 'player' }, { 'x-room-owner-token': storedRoomOwnerToken(gameId) });
+      const base = roomId ? `/api/rooms/${encodeURIComponent(roomId)}` : `/api/games/${encodeURIComponent(gameId)}`;
+      const { response, data } = await post(`${base}/invites`, { inviteType: 'player' }, { 'x-room-owner-token': storedRoomOwnerToken(roomId || gameId) });
       if (!response.ok) throw new Error(data.error || 'invite_failed');
       seatJoinInviteToken = data.token;
     }
@@ -536,23 +553,24 @@ async function joinPlayerGame() {
 }
 
 async function reconnectPlayerGame() {
-  if (!gameId) return;
+  if (!roomId && !gameId) return;
   const reconnectCode = $('reconnect-code').value.trim();
   if (!reconnectCode) return showMessage('请输入重连码', true);
   try {
-    const { response, data } = await post(`/api/games/${encodeURIComponent(gameId)}/reconnect`, { reconnectCode });
+    const base = roomId ? `/api/rooms/${encodeURIComponent(roomId)}` : `/api/games/${encodeURIComponent(gameId)}`;
+    const { response, data } = await post(`${base}/reconnect`, { reconnectCode });
     if (!response.ok) throw new Error(data.error || 'invalid_reconnect_code');
     const joinedSeat = Number(data.you);
-    const sessionId = data.competition?.competitionId || competitionId || gameId;
+    const sessionId = roomId || data.competition?.competitionId || competitionId || gameId;
     competitionId = data.competition?.competitionId || competitionId;
     seat = joinedSeat;
     controlledSeat = joinedSeat;
     controlRequested = true;
     controlActive = true;
-    playerJoinAttempt = gameId;
+    playerJoinAttempt = activeSessionId();
     persistPlayerId(sessionId, joinedSeat, data.seatControllers?.[joinedSeat]?.id || localPlayerId(sessionId, joinedSeat));
     rememberSeatSession(sessionId, joinedSeat, data.seatSessionToken, data.reconnectCode);
-    rememberReplayAccess(data.replayAccessToken, gameId);
+    rememberReplayAccess(data.replayAccessToken, roomId || gameId);
     $('reconnect-code').value = '';
     syncUrl();
     showMessage(`已恢复玩家 ${['A', 'B', 'C'][joinedSeat]} 的座位`);
@@ -561,10 +579,11 @@ async function reconnectPlayerGame() {
 }
 
 async function removeOfflinePlayer(seatId) {
-  const ownerToken = storedRoomOwnerToken(gameId);
+  const ownerToken = storedRoomOwnerToken(roomId || gameId);
   if (!ownerToken) return showMessage('只有房主可以移除掉线玩家', true);
   try {
-    const response = await fetch(`/api/games/${encodeURIComponent(gameId)}/players/${seatId}`, { method: 'DELETE', headers: { 'x-room-owner-token': ownerToken } });
+    const base = roomId ? `/api/rooms/${encodeURIComponent(roomId)}` : `/api/games/${encodeURIComponent(gameId)}`;
+    const response = await fetch(`${base}/players/${seatId}`, { method: 'DELETE', headers: { 'x-room-owner-token': ownerToken } });
     const data = await readJson(response);
     if (!response.ok) throw new Error(data.error || 'remove_failed');
     showMessage(`已移除掉线玩家 ${['A', 'B', 'C'][seatId]}`);
@@ -652,23 +671,28 @@ function replayEventLabel(frame, previousFrame) {
 }
 
 async function refresh() {
-  if (replayMode || !gameId || refreshing) return;
+  if (replayMode || (!roomId && !gameId) || refreshing) return;
   refreshing = true;
   try {
     await ensurePlayerJoined();
-    const stateUrl = new URL(`/api/games/${gameId}/state`, location.origin); stateUrl.searchParams.set('seat', seat); if (view === 'global') stateUrl.searchParams.set('view', 'global');
+    const statePath = roomId ? `/api/rooms/${roomId}/state` : `/api/games/${gameId}/state`;
+    const stateUrl = new URL(statePath, location.origin); stateUrl.searchParams.set('seat', seat); if (view === 'global') stateUrl.searchParams.set('view', 'global');
     const response = await fetch(stateUrl, { headers: observationHeaders(seat) });
     const data = await readJson(response);
     if (!response.ok) throw new Error(data.error || 'state_failed');
-    if (data.competition?.competitionId) competitionId = data.competition.competitionId;
-    if (data.competition?.currentGameId && data.competition.currentGameId !== gameId) {
+    if (!roomId && data.roomId) {
       const replayToken = storedReplayAccess(gameId);
       const ownerToken = storedRoomOwnerToken(gameId);
-      gameId = data.competition.currentGameId;
-      rememberReplayAccess(replayToken, gameId);
-      rememberRoomOwner(ownerToken, gameId);
-      controlActive = controlActive || activeInvite?.inviteType === 'player'; playerJoinAttempt = controlActive ? gameId : null; strategyParticipants = {}; strategySnapshotGameId = null; selected.clear(); syncUrl(); refreshing = false; return refresh();
+      roomId = data.roomId;
+      rememberReplayAccess(replayToken, roomId);
+      rememberRoomOwner(ownerToken, roomId);
+      restoreStoredControlRequest(roomId);
+      syncUrl();
+      refreshing = false;
+      return refresh();
     }
+    gameId = data.gameId || data.room?.currentGameId || null;
+    if (data.competition?.competitionId) competitionId = data.competition.competitionId;
     state = data;
     if (controlActive && seat === controlledSeat && data.controlAuthorized === false) {
       controlActive = false;
@@ -719,11 +743,11 @@ function render() {
   const left = (seat + 2) % 3;
   const right = (seat + 1) % 3;
   const bidLabel = state.bidStage === 'rob' ? '抢地主' : '叫地主';
-  $('invite-game').hidden = replayMode || !gameId || !setupConfirmed || !isRoomOwner();
+  $('invite-game').hidden = replayMode || (!roomId && !gameId) || !setupConfirmed || !isRoomOwner();
   $('agent-connect').hidden = replayMode || !setupConfirmed || !isRoomOwner();
   $('global-view').hidden = !replayMode && !isRoomOwner();
   document.querySelector('.perspectives').hidden = false;
-  const activeSession = controlActive ? storedSeatSession(competitionId || gameId, controlledSeat) : null;
+  const activeSession = controlActive ? storedSeatSession(activeSessionId(), controlledSeat) : null;
   $('session-code-header').hidden = !activeSession?.reconnectCode || replayMode;
   $('session-code-header').textContent = activeSession?.reconnectCode ? `重连码 ${activeSession.reconnectCode}` : '重连码';
   renderCountdown();
@@ -807,16 +831,18 @@ async function loadStrategyDetails(force = false) {
     strategySnapshotGameId = gameId;
     return;
   }
-  if (!gameId || strategyLoading || (!force && strategySnapshotGameId === gameId)) return;
+  const snapshotId = gameId || roomId;
+  if ((!roomId && !gameId) || strategyLoading || (!force && strategySnapshotGameId === snapshotId)) return;
   strategyLoading = true;
   renderStrategyDocument();
   try {
-    const ownerToken = storedRoomOwnerToken(gameId);
-    const response = await fetch(`/api/games/${encodeURIComponent(gameId)}/strategies?view=global`, { headers: ownerToken ? { 'x-room-owner-token': ownerToken } : {} });
+    const ownerToken = storedRoomOwnerToken(roomId || gameId);
+    const base = roomId ? `/api/rooms/${encodeURIComponent(roomId)}` : `/api/games/${encodeURIComponent(gameId)}`;
+    const response = await fetch(`${base}/strategies?view=global`, { headers: ownerToken ? { 'x-room-owner-token': ownerToken } : {} });
     const data = await readJson(response);
     if (!response.ok) throw new Error(data.error || 'strategy_load_failed');
     strategyParticipants = data.participants || {};
-    strategySnapshotGameId = data.gameId;
+    strategySnapshotGameId = data.gameId || roomId;
   } catch (error) {
     showMessage(`策略加载失败：${errorText(error.message)}`, true);
   } finally {
@@ -1207,7 +1233,7 @@ function renderLifecycle() {
     const emptySeats = [0, 1, 2].filter((seatId) => !state.seatControllers?.[seatId]);
     playerJoin.hidden = !canDirectJoin || emptySeats.length === 0;
     reconnectTools.hidden = controlActive || !Object.values(state.seatControllers || {}).some((controller) => controller.type === 'player');
-    const localSession = controlActive ? storedSeatSession(competitionId || gameId, controlledSeat) : null;
+    const localSession = controlActive ? storedSeatSession(activeSessionId(), controlledSeat) : null;
     sessionInfo.hidden = !localSession?.reconnectCode;
     $('session-reconnect-code').textContent = localSession?.reconnectCode || '';
     const removableSeats = isRoomOwner() ? [0, 1, 2].filter((seatId) => state.seatControllers?.[seatId]?.type === 'player' && state.seatPresence?.[seatId]?.status === 'offline') : [];
@@ -1366,7 +1392,8 @@ function cardFace(card) { const [rank, suit] = cardId(card).split(':').map(Numbe
 async function action(payload) {
   if (!controlActive || seat !== controlledSeat) return showMessage('当前仅为观察视角，请切回已加入的玩家座位', true);
   if (!gameId || !state || state.current !== controlledSeat) return showMessage('还没有轮到当前玩家', true);
-  try { const { response, data } = await post(`/api/games/${gameId}/actions`, { seatId: controlledSeat, action: payload }, seatSessionHeaders()); if (!response.ok) return showMessage(errorText(data.error), true); selected.clear(); await refresh(); }
+  const path = roomId ? `/api/rooms/${roomId}/actions` : `/api/games/${gameId}/actions`;
+  try { const { response, data } = await post(path, { gameId, seatId: controlledSeat, seq: state.seq, action: payload }, seatSessionHeaders()); if (!response.ok) return showMessage(errorText(data.error), true); selected.clear(); await refresh(); }
   catch (error) { setConnectionError(error); }
 }
 
@@ -1389,13 +1416,13 @@ async function createReplayRematch() {
   button.disabled = true;
   button.textContent = '创建中…';
   try {
-    const response = await fetch(`/api/replays/${encodeURIComponent(sourceGameId)}/rematch`, { method: 'POST', headers: replayAccessHeaders(sourceGameId) });
+    const response = await fetch(`/api/replays/${encodeURIComponent(sourceGameId)}/rematch-room`, { method: 'POST', headers: replayAccessHeaders(sourceGameId) });
     const data = await readJson(response);
     if (!response.ok) throw new Error(data.error || 'rematch_failed');
     const target = new URL('/', location.origin);
-    target.searchParams.set('game', data.gameId);
-    rememberReplayAccess(data.replayAccessToken, data.gameId);
-    rememberRoomOwner(data.roomOwnerToken, data.gameId);
+    target.searchParams.set('room', data.roomId);
+    rememberReplayAccess(data.replayAccessToken, data.roomId);
+    rememberRoomOwner(data.roomOwnerToken, data.roomId);
     location.assign(target.href);
   } catch (error) {
     button.disabled = false;
@@ -1445,7 +1472,7 @@ $('copy-reconnect-code').onclick = async () => {
   catch { showMessage('复制失败，请手动记录重连码', true); }
 };
 $('session-code-header').onclick = async () => {
-  const code = storedSeatSession(competitionId || gameId, controlledSeat)?.reconnectCode;
+  const code = storedSeatSession(activeSessionId(), controlledSeat)?.reconnectCode;
   if (!code) return;
   try { await navigator.clipboard.writeText(code); showMessage('重连码已复制'); }
   catch { showMessage(`重连码：${code}`); }
@@ -1474,9 +1501,9 @@ async function initialize() {
   try {
     if (inviteToken) await resolveInvite();
     if (replayMode) await loadReplay();
-    else if (gameId) {
-      restoreActiveInvite(gameId);
-      restoreStoredControlRequest(competitionId || gameId);
+    else if (roomId || gameId) {
+      restoreActiveInvite(activeSessionId());
+      restoreStoredControlRequest(activeSessionId());
       if (view === 'global' && !isRoomOwner()) view = 'player';
       syncUrl();
       await refresh();
@@ -1489,6 +1516,7 @@ async function initialize() {
 function renderRoomSetupEntry() {
   state = null;
   gameId = null;
+  roomId = null;
   competitionId = null;
   setupConfirmed = false;
   controlRequested = false;
